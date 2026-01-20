@@ -1,0 +1,8 @@
+*.log
+*.jsonl
+*.gz
+__pycache__/
+*.pyc
+.venv/
+dist/
+build/
