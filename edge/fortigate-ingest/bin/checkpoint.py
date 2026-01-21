@@ -3,11 +3,13 @@ import os
 import time
 from typing import Any, Dict
 
-CHECKPOINT_PATH = "/data/fortigate/parsed/checkpoint.json"
+CHECKPOINT_PATH = "/data/fortigate-runtime/work/checkpoint.json"
+ACTIVE_DEFAULT_PATH = "/data/fortigate-runtime/input/fortigate.log"
 
 def _atomic_write_json(path: str, obj: Dict[str, Any]) -> None:
     tmp = f"{path}.tmp.{os.getpid()}"
     data = json.dumps(obj, ensure_ascii=False, separators=(",", ":"), sort_keys=False)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(tmp, "w", encoding="utf-8") as f:
         f.write(data)
         f.write("\n")
@@ -19,8 +21,8 @@ def load_checkpoint() -> Dict[str, Any]:
     if not os.path.exists(CHECKPOINT_PATH):
         return {
             "schema_version": 1,
-            "active": {"path": "/data/fortigate/fortigate.log", "inode": None, "offset": 0, "last_event_ts_seen": None},
-            "completed": [],  # list of {"path":..., "inode":..., "size":..., "mtime":..., "completed_at":...}
+            "active": {"path": ACTIVE_DEFAULT_PATH, "inode": None, "offset": 0, "last_event_ts_seen": None},
+            "completed": [],  # list of {"key":..., "path":..., "inode":..., "size":..., "mtime":..., "completed_at":...}
             "counters": {
                 "lines_in_total": 0,
                 "bytes_in_total": 0,

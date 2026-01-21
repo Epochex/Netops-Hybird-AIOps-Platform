@@ -4,7 +4,6 @@ import sys
 import time
 from typing import Any, Dict
 
-# Make sibling imports work when running from repo root:
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 if _THIS_DIR not in sys.path:
     sys.path.insert(0, _THIS_DIR)
@@ -15,7 +14,6 @@ from sink_jsonl import append_event, append_dlq, append_metrics
 from source_file import ACTIVE_PATH, list_rotated_files, stat_file, read_whole_file_lines, follow_active_binary, active_inode
 from metrics import MetricsWindow
 
-# Hard-coded behavior knobs (no CLI args)
 METRICS_INTERVAL_SEC = 10
 CHECKPOINT_FLUSH_INTERVAL_SEC = 2
 
@@ -26,7 +24,8 @@ def _ingest_ts() -> int:
     return int(time.time())
 
 def _ensure_dirs() -> None:
-    os.makedirs("/data/fortigate/parsed", exist_ok=True)
+    os.makedirs("/data/fortigate-runtime/output/parsed", exist_ok=True)
+    os.makedirs("/data/fortigate-runtime/work", exist_ok=True)
 
 def _write_dlq(ck: Dict[str, Any], reason: str, raw: str, source: Dict[str, Any]) -> None:
     dlq = {

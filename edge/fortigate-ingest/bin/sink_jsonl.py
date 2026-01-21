@@ -3,10 +3,10 @@ import os
 import time
 from typing import Any, Dict
 
-PARSED_DIR = "/data/fortigate/parsed"
+PARSED_DIR = "/data/fortigate-runtime/output/parsed"
 EVENTS_PREFIX = "events"
 DLQ_PREFIX = "dlq"
-METRICS_PATH = "/data/fortigate/parsed/metrics.jsonl"
+METRICS_PATH = "/data/fortigate-runtime/output/parsed/metrics.jsonl"
 
 def _hour_key(ts_epoch: int) -> str:
     t = time.localtime(ts_epoch)
