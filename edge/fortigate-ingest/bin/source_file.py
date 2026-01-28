@@ -9,6 +9,7 @@ ACTIVE_PATH = "/data/fortigate-runtime/input/fortigate.log"
 
 ROTATED_RE = re.compile(r"^fortigate\.log-(\d{8}-\d{6})(?:\.gz)?$")
 
+
 def list_rotated_files() -> List[str]:
     files: List[str] = []
     try:
@@ -25,9 +26,11 @@ def list_rotated_files() -> List[str]:
     files.sort(key=key_fn)
     return files
 
+
 def stat_file(path: str) -> Tuple[int, int, int]:
     st = os.stat(path)
     return (st.st_ino, st.st_size, int(st.st_mtime))
+
 
 def read_whole_file_lines(path: str) -> Generator[Tuple[str, Dict], None, None]:
     inode, size, mtime = stat_file(path)
@@ -43,28 +46,50 @@ def read_whole_file_lines(path: str) -> Generator[Tuple[str, Dict], None, None]:
                 yield line, {"path": path, "inode": inode, "offset": offset, "size": size, "mtime": mtime}
                 offset += len(line.encode("utf-8", errors="replace"))
 
-def follow_active_binary(offset: int) -> Generator[Tuple[str, int], None, None]:
+
+def follow_active_binary(offset: int, max_wait_sec: float = 0.5) -> Generator[Tuple[str, int], None, None]:
+    """
+    Tail ACTIVE_PATH from byte offset. Yield (line, new_offset).
+    IMPORTANT: This generator will return if no new bytes arrive within max_wait_sec.
+    This allows the caller (main loop) to keep control (rotate scan, checkpoint flush, metrics emit).
+    """
+    start_wait = time.time()
+
     with open(ACTIVE_PATH, "rb") as f:
         f.seek(offset, os.SEEK_SET)
         buf = b""
         while True:
             chunk = f.read(8192)
             if not chunk:
-                time.sleep(0.2)
+                if (time.time() - start_wait) >= max_wait_sec:
+                    return
+                time.sleep(0.05)
                 continue
+
+            start_wait = time.time()
             buf += chunk
+
             while True:
                 nl = buf.find(b"\n")
                 if nl == -1:
                     break
+
                 line_bytes = buf[:nl + 1]
                 buf = buf[nl + 1:]
                 offset += len(line_bytes)
                 line = line_bytes.decode("utf-8", errors="replace")
                 yield line, offset
 
+
 def active_inode() -> Optional[int]:
     try:
         return os.stat(ACTIVE_PATH).st_ino
+    except FileNotFoundError:
+        return None
+
+
+def active_size() -> Optional[int]:
+    try:
+        return os.stat(ACTIVE_PATH).st_size
     except FileNotFoundError:
         return None

@@ -124,6 +124,10 @@ def stable_event_id(raw_line: str) -> str:
 def parse_fortigate_line(raw_line: str, now_year: int) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
     """
     Return (event, dlq). One of them is None.
+
+    Notes:
+    - Event output does NOT include full raw line to avoid output amplification.
+    - DLQ keeps raw for debugging/forensics.
     """
     line = raw_line.rstrip("\n")
     if not line:
@@ -180,7 +184,6 @@ def parse_fortigate_line(raw_line: str, now_year: int) -> Tuple[Optional[Dict[st
         "rcvdbyte": _to_int(kv.get("rcvdbyte")),
         "sentpkt": _to_int(kv.get("sentpkt")),
         "rcvdpkt": _to_int(kv.get("rcvdpkt")),
-        "raw": raw_line,
         "parse_status": "ok"
     }
 
