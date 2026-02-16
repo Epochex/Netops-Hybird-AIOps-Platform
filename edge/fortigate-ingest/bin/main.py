@@ -1,9 +1,11 @@
 import datetime
+import json
 import os
 import signal
 import sys
 import time
-from typing import Any, Dict, Optional
+import logging
+from typing import Any, Dict
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 if _THIS_DIR not in sys.path:
@@ -26,13 +28,10 @@ from metrics import MetricsWindow
 METRICS_INTERVAL_SEC = 10
 CHECKPOINT_FLUSH_INTERVAL_SEC = 2
 
-# 空转 sleep：避免 while True 空跑
 IDLE_SLEEP_SEC = 0.2
-
-# follow_active_binary 在无数据时最多等多久返回（秒）
 ACTIVE_POLL_MAX_WAIT_SEC = 0.5
 
-# 全局退出标志
+_HEARTBEAT_INTERVAL_SEC = 10
 _SHOULD_STOP = False
 
 
@@ -54,10 +53,33 @@ def _ensure_dirs() -> None:
     os.makedirs("/data/fortigate-runtime/work", exist_ok=True)
 
 
+def _utc_iso_now() -> str:
+    return datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+
+def _local_events_filename(ts: int) -> str:
+    lt = time.localtime(ts)
+    return f"events-{lt.tm_year:04d}{lt.tm_mon:02d}{lt.tm_mday:02d}-{lt.tm_hour:02d}.jsonl"
+
+
+def _local_metrics_filename(ts: int) -> str:
+    lt = time.localtime(ts)
+    return f"metrics-{lt.tm_year:04d}{lt.tm_mon:02d}{lt.tm_mday:02d}-{lt.tm_hour:02d}.jsonl"
+
+
+def _init_logging() -> None:
+    level = os.environ.get("LOG_LEVEL", "INFO").upper()
+    logging.basicConfig(
+        level=getattr(logging, level, logging.INFO),
+        format="%(asctime)sZ level=%(levelname)s msg=%(message)s",
+        handlers=[logging.StreamHandler(sys.stdout)],
+    )
+
+
 def _write_dlq(ck: Dict[str, Any], reason: str, raw: str, source: Dict[str, Any]) -> None:
     dlq = {
         "schema_version": 1,
-        "ingest_ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "ingest_ts": _utc_iso_now(),
         "reason": reason,
         "source": source,
         "raw": raw,
@@ -71,7 +93,7 @@ def _write_dlq(ck: Dict[str, Any], reason: str, raw: str, source: Dict[str, Any]
 
 
 def _write_event(ck: Dict[str, Any], event: Dict[str, Any], source: Dict[str, Any]) -> None:
-    event["ingest_ts"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    event["ingest_ts"] = _utc_iso_now()
     event["source"] = {"path": source.get("path"), "inode": source.get("inode"), "offset": source.get("offset")}
     try:
         append_event(_ingest_ts(), event)
@@ -83,10 +105,6 @@ def _write_event(ck: Dict[str, Any], event: Dict[str, Any], source: Dict[str, An
 
 
 def process_rotated_files(ck: Dict[str, Any]) -> int:
-    """
-    Process all rotated segments not yet completed.
-    Return number of lines processed (for idle detection).
-    """
     processed = 0
 
     for path in list_rotated_files():
@@ -119,20 +137,14 @@ def process_rotated_files(ck: Dict[str, Any]) -> int:
 
 
 def _handle_active_truncate_if_any(ck: Dict[str, Any]) -> bool:
-    """
-    If active file size < ck offset, reset offset to 0 and emit a DLQ record.
-    Return True if a reset happened.
-    """
     sz = active_size()
     if sz is None:
         return False
 
     off = int(ck["active"].get("offset", 0))
     if sz < off:
-        # emit a DLQ record for audit/debug
         src = {"path": ACTIVE_PATH, "inode": ck["active"].get("inode"), "offset": off, "size": sz}
         _write_dlq(ck, "active_truncated_reset_offset", "", src)
-
         ck["active"]["offset"] = 0
         return True
 
@@ -140,10 +152,6 @@ def _handle_active_truncate_if_any(ck: Dict[str, Any]) -> bool:
 
 
 def process_active_tail(ck: Dict[str, Any], max_seconds: float = 2.0) -> int:
-    """
-    Tail the active file for up to max_seconds.
-    Return number of lines processed (for idle detection).
-    """
     processed = 0
     start = time.time()
 
@@ -156,21 +164,17 @@ def process_active_tail(ck: Dict[str, Any], max_seconds: float = 2.0) -> int:
         ck["active"]["inode"] = cur_inode
         ck["active"]["offset"] = 0
 
-    # rotation detected (inode changed)
     if ck["active"]["inode"] != cur_inode:
         ck["active"]["inode"] = cur_inode
         ck["active"]["offset"] = 0
 
-    # truncate defense
     _handle_active_truncate_if_any(ck)
 
     offset = int(ck["active"].get("offset", 0))
 
-    # follow_active_binary returns if idle for ACTIVE_POLL_MAX_WAIT_SEC
     for line, new_offset in follow_active_binary(offset, max_wait_sec=ACTIVE_POLL_MAX_WAIT_SEC):
         processed += 1
 
-        # if inode flips while reading, stop and let next loop handle from offset 0
         new_inode = active_inode()
         if new_inode is not None and new_inode != ck["active"]["inode"]:
             ck["active"]["inode"] = new_inode
@@ -206,39 +210,127 @@ def _flush_checkpoint(ck: Dict[str, Any]) -> None:
         ck["counters"]["checkpoint_fail_total"] += 1
 
 
+def _counters_snapshot(ck: Dict[str, Any]) -> Dict[str, int]:
+    c = ck.get("counters", {})
+    def g(k: str) -> int:
+        try:
+            return int(c.get(k, 0))
+        except Exception:
+            return 0
+    return {
+        "lines_in_total": g("lines_in_total"),
+        "bytes_in_total": g("bytes_in_total"),
+        "events_out_total": g("events_out_total"),
+        "dlq_out_total": g("dlq_out_total"),
+        "parse_fail_total": g("parse_fail_total"),
+        "write_fail_total": g("write_fail_total"),
+        "checkpoint_fail_total": g("checkpoint_fail_total"),
+    }
+
+
+def _delta(now: Dict[str, int], prev: Dict[str, int]) -> Dict[str, int]:
+    out = {}
+    for k, v in now.items():
+        out[k] = v - int(prev.get(k, 0))
+    return out
+
+
+def _emit_heartbeat(
+    start_ts: int,
+    ck: Dict[str, Any],
+    prev_counters: Dict[str, int],
+    last_hb_ts: int,
+) -> Dict[str, int]:
+    now_ts = _now_ts()
+    cur = _counters_snapshot(ck)
+    d = _delta(cur, prev_counters)
+
+    act_inode = ck.get("active", {}).get("inode")
+    act_off = ck.get("active", {}).get("offset")
+    act_sz = active_size()
+    lag = None
+    try:
+        if act_sz is not None and act_off is not None:
+            lag = int(act_sz) - int(act_off)
+    except Exception:
+        lag = None
+
+    payload = {
+        "kind": "heartbeat",
+        "ts": _utc_iso_now(),
+        "uptime_sec": now_ts - start_ts,
+        "active": {
+            "path": ACTIVE_PATH,
+            "inode": act_inode,
+            "offset": act_off,
+            "size": act_sz,
+            "lag_bytes": lag,
+        },
+        "last_event_ts_seen": ck.get("active", {}).get("last_event_ts_seen"),
+        "out_files": {
+            "events": _local_events_filename(now_ts),
+            "metrics": _local_metrics_filename(now_ts),
+        },
+        "counters_total": cur,
+        "counters_delta": d,
+        "interval_sec": max(1, now_ts - last_hb_ts),
+    }
+
+    logging.info(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+    return cur
+
+
 def main() -> int:
     global _SHOULD_STOP
 
-    # signals
     signal.signal(signal.SIGTERM, _handle_stop_signal)
     signal.signal(signal.SIGINT, _handle_stop_signal)
 
+    _init_logging()
     _ensure_dirs()
 
+    start_ts = _now_ts()
     ck = load_checkpoint()
     mw = MetricsWindow()
 
     last_metrics = _now_ts()
     last_flush = _now_ts()
+    last_hb = _now_ts()
+    prev_counters = _counters_snapshot(ck)
+
+    logging.info(
+        json.dumps(
+            {
+                "kind": "start",
+                "ts": _utc_iso_now(),
+                "active_path": ACTIVE_PATH,
+                "checkpoint_flush_sec": CHECKPOINT_FLUSH_INTERVAL_SEC,
+                "metrics_interval_sec": METRICS_INTERVAL_SEC,
+                "heartbeat_interval_sec": _HEARTBEAT_INTERVAL_SEC,
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+    )
 
     try:
         while True:
             if _SHOULD_STOP:
-                # graceful shutdown: flush checkpoint and exit 0
                 _flush_checkpoint(ck)
-                # best-effort final metrics
                 try:
                     now = _now_ts()
                     metric = mw.build_metrics(ck, now)
                     append_metrics(now, metric)
                 except Exception:
                     pass
+                logging.info(json.dumps({"kind": "stop", "ts": _utc_iso_now()}, ensure_ascii=False, separators=(",", ":")))
                 return 0
 
             n_rot = process_rotated_files(ck)
             n_act = process_active_tail(ck, max_seconds=2.0)
 
             now = _now_ts()
+
             if now - last_flush >= CHECKPOINT_FLUSH_INTERVAL_SEC:
                 _flush_checkpoint(ck)
                 last_flush = now
@@ -251,16 +343,20 @@ def main() -> int:
                     ck["counters"]["write_fail_total"] += 1
                 last_metrics = now
 
-            # idle backoff to avoid busy loop
+            if now - last_hb >= _HEARTBEAT_INTERVAL_SEC:
+                prev_counters = _emit_heartbeat(start_ts, ck, prev_counters, last_hb)
+                last_hb = now
+
             if n_rot == 0 and n_act == 0:
                 time.sleep(IDLE_SLEEP_SEC)
 
     except KeyboardInterrupt:
         _flush_checkpoint(ck)
+        logging.info(json.dumps({"kind": "stop", "ts": _utc_iso_now()}, ensure_ascii=False, separators=(",", ":")))
         return 0
     except Exception:
-        # crash path: try to persist checkpoint for post-mortem, then exit non-zero
         _flush_checkpoint(ck)
+        logging.exception("crash")
         return 2
 
 

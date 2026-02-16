@@ -1,0 +1,29 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fortigate-ingest
+  namespace: edge
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fortigate-ingest
+  template:
+    metadata:
+      labels:
+        app: fortigate-ingest
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: r230
+      containers:
+        - name: fortigate-ingest
+          image: fortigate-ingest:0.2
+          imagePullPolicy: IfNotPresent
+          volumeMounts:
+            - name: fortigate-runtime
+              mountPath: /data/fortigate-runtime
+      volumes:
+        - name: fortigate-runtime
+          hostPath:
+            path: /data/fortigate-runtime
+            type: DirectoryOrCreate

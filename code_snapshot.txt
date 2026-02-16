@@ -1,0 +1,1133 @@
+# Netops-causality-remediation code snapshot
+# Root: /data/Netops-causality-remediation
+# Files: 9
+
+## TREE (filtered)
+  README.md
+  code_snapshot.txt
+  export.py
+  docs/
+  core/
+    deployments/
+    tests/
+    docs/
+  edge/
+    fortigate-ingest/
+      Dockerfile.stageb
+      deployments/
+      tests/
+      docs/
+      configs/
+      bin/
+        checkpoint.py
+        main.py
+        metrics.py
+        parser_fgt_v1.py
+        sink_jsonl.py
+        source_file.py
+      scripts/
+
+
+====================================================================================================
+FILE: README.md
+====================================================================================================
+# Netops-causality-remediation
+
+Monorepo:
+- edge/: R230 (ingest/parse)
+- core/: R450 (storage/analytics/observability)
+
+Runtime data is NOT in Git.
+
+====================================================================================================
+FILE: edge/fortigate-ingest/Dockerfile.stageb
+====================================================================================================
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY bin/ /app/bin
+
+CMD ['python','/app/bin/main.py']
+
+====================================================================================================
+FILE: edge/fortigate-ingest/bin/checkpoint.py
+====================================================================================================
+import json
+import os
+import time
+from typing import Any, Dict
+
+CHECKPOINT_PATH = "/data/fortigate-runtime/work/checkpoint.json"
+ACTIVE_DEFAULT_PATH = "/data/fortigate-runtime/input/fortigate.log"
+
+def _atomic_write_json(path: str, obj: Dict[str, Any]) -> None:
+    tmp = f"{path}.tmp.{os.getpid()}"
+    data = json.dumps(obj, ensure_ascii=False, separators=(",", ":"), sort_keys=False)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(data)
+        f.write("\n")
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+def load_checkpoint() -> Dict[str, Any]:
+    if not os.path.exists(CHECKPOINT_PATH):
+        return {
+            "schema_version": 1,
+            "active": {"path": ACTIVE_DEFAULT_PATH, "inode": None, "offset": 0, "last_event_ts_seen": None},
+            "completed": [],  # list of {"key":..., "path":..., "inode":..., "size":..., "mtime":..., "completed_at":...}
+            "counters": {
+                "lines_in_total": 0,
+                "bytes_in_total": 0,
+                "events_out_total": 0,
+                "dlq_out_total": 0,
+                "parse_fail_total": 0,
+                "write_fail_total": 0,
+                "checkpoint_fail_total": 0
+            },
+            "updated_at": int(time.time())
+        }
+    with open(CHECKPOINT_PATH, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+def save_checkpoint(ck: Dict[str, Any]) -> None:
+    ck["updated_at"] = int(time.time())
+    _atomic_write_json(CHECKPOINT_PATH, ck)
+
+def completed_key(path: str, inode: int, size: int, mtime: int) -> str:
+    return f"{path}|{inode}|{size}|{mtime}"
+
+def is_completed(ck: Dict[str, Any], path: str, inode: int, size: int, mtime: int) -> bool:
+    key = completed_key(path, inode, size, mtime)
+    for item in ck.get("completed", []):
+        if item.get("key") == key:
+            return True
+    return False
+
+def mark_completed(ck: Dict[str, Any], path: str, inode: int, size: int, mtime: int) -> None:
+    key = completed_key(path, inode, size, mtime)
+    ck.setdefault("completed", []).append({
+        "key": key,
+        "path": path,
+        "inode": inode,
+        "size": size,
+        "mtime": mtime,
+        "completed_at": int(time.time())
+    })
+    if len(ck["completed"]) > 5000:
+        ck["completed"] = ck["completed"][-5000:]
+
+====================================================================================================
+FILE: edge/fortigate-ingest/bin/main.py
+====================================================================================================
+import datetime
+import os
+import signal
+import sys
+import time
+from typing import Any, Dict, Optional
+
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+if _THIS_DIR not in sys.path:
+    sys.path.insert(0, _THIS_DIR)
+
+from checkpoint import load_checkpoint, save_checkpoint, is_completed, mark_completed
+from parser_fgt_v1 import parse_fortigate_line
+from sink_jsonl import append_event, append_dlq, append_metrics
+from source_file import (
+    ACTIVE_PATH,
+    list_rotated_files,
+    stat_file,
+    read_whole_file_lines,
+    follow_active_binary,
+    active_inode,
+    active_size,
+)
+from metrics import MetricsWindow
+
+METRICS_INTERVAL_SEC = 10
+CHECKPOINT_FLUSH_INTERVAL_SEC = 2
+
+# 空转 sleep：避免 while True 空跑
+IDLE_SLEEP_SEC = 0.2
+
+# follow_active_binary 在无数据时最多等多久返回（秒）
+ACTIVE_POLL_MAX_WAIT_SEC = 0.5
+
+# 全局退出标志
+_SHOULD_STOP = False
+
+
+def _handle_stop_signal(signum: int, frame: Any) -> None:
+    global _SHOULD_STOP
+    _SHOULD_STOP = True
+
+
+def _now_ts() -> int:
+    return int(time.time())
+
+
+def _ingest_ts() -> int:
+    return int(time.time())
+
+
+def _ensure_dirs() -> None:
+    os.makedirs("/data/fortigate-runtime/output/parsed", exist_ok=True)
+    os.makedirs("/data/fortigate-runtime/work", exist_ok=True)
+
+
+def _write_dlq(ck: Dict[str, Any], reason: str, raw: str, source: Dict[str, Any]) -> None:
+    dlq = {
+        "schema_version": 1,
+        "ingest_ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "reason": reason,
+        "source": source,
+        "raw": raw,
+    }
+    try:
+        append_dlq(_ingest_ts(), dlq)
+        ck["counters"]["dlq_out_total"] += 1
+        ck["counters"]["parse_fail_total"] += 1
+    except Exception:
+        ck["counters"]["write_fail_total"] += 1
+
+
+def _write_event(ck: Dict[str, Any], event: Dict[str, Any], source: Dict[str, Any]) -> None:
+    event["ingest_ts"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    event["source"] = {"path": source.get("path"), "inode": source.get("inode"), "offset": source.get("offset")}
+    try:
+        append_event(_ingest_ts(), event)
+        ck["counters"]["events_out_total"] += 1
+        if event.get("event_ts"):
+            ck["active"]["last_event_ts_seen"] = event["event_ts"]
+    except Exception:
+        ck["counters"]["write_fail_total"] += 1
+
+
+def process_rotated_files(ck: Dict[str, Any]) -> int:
+    """
+    Process all rotated segments not yet completed.
+    Return number of lines processed (for idle detection).
+    """
+    processed = 0
+
+    for path in list_rotated_files():
+        try:
+            inode, size, mtime = stat_file(path)
+        except FileNotFoundError:
+            continue
+
+        if is_completed(ck, path, inode, size, mtime):
+            continue
+
+        for line, src in read_whole_file_lines(path):
+            processed += 1
+
+            raw = line
+            ck["counters"]["lines_in_total"] += 1
+            ck["counters"]["bytes_in_total"] += len(raw.encode("utf-8", errors="replace"))
+
+            now_year = datetime.datetime.now().year
+            event, dlq = parse_fortigate_line(raw, now_year)
+            if event is not None:
+                _write_event(ck, event, src)
+            else:
+                reason = dlq.get("reason", "parse_fail") if dlq else "parse_fail"
+                _write_dlq(ck, reason, raw, src)
+
+        mark_completed(ck, path, inode, size, mtime)
+
+    return processed
+
+
+def _handle_active_truncate_if_any(ck: Dict[str, Any]) -> bool:
+    """
+    If active file size < ck offset, reset offset to 0 and emit a DLQ record.
+    Return True if a reset happened.
+    """
+    sz = active_size()
+    if sz is None:
+        return False
+
+    off = int(ck["active"].get("offset", 0))
+    if sz < off:
+        # emit a DLQ record for audit/debug
+        src = {"path": ACTIVE_PATH, "inode": ck["active"].get("inode"), "offset": off, "size": sz}
+        _write_dlq(ck, "active_truncated_reset_offset", "", src)
+
+        ck["active"]["offset"] = 0
+        return True
+
+    return False
+
+
+def process_active_tail(ck: Dict[str, Any], max_seconds: float = 2.0) -> int:
+    """
+    Tail the active file for up to max_seconds.
+    Return number of lines processed (for idle detection).
+    """
+    processed = 0
+    start = time.time()
+
+    cur_inode = active_inode()
+    if cur_inode is None:
+        time.sleep(0.1)
+        return 0
+
+    if ck["active"].get("inode") is None:
+        ck["active"]["inode"] = cur_inode
+        ck["active"]["offset"] = 0
+
+    # rotation detected (inode changed)
+    if ck["active"]["inode"] != cur_inode:
+        ck["active"]["inode"] = cur_inode
+        ck["active"]["offset"] = 0
+
+    # truncate defense
+    _handle_active_truncate_if_any(ck)
+
+    offset = int(ck["active"].get("offset", 0))
+
+    # follow_active_binary returns if idle for ACTIVE_POLL_MAX_WAIT_SEC
+    for line, new_offset in follow_active_binary(offset, max_wait_sec=ACTIVE_POLL_MAX_WAIT_SEC):
+        processed += 1
+
+        # if inode flips while reading, stop and let next loop handle from offset 0
+        new_inode = active_inode()
+        if new_inode is not None and new_inode != ck["active"]["inode"]:
+            ck["active"]["inode"] = new_inode
+            ck["active"]["offset"] = 0
+            break
+
+        raw = line
+        ck["counters"]["lines_in_total"] += 1
+        ck["counters"]["bytes_in_total"] += len(raw.encode("utf-8", errors="replace"))
+
+        src = {"path": ACTIVE_PATH, "inode": ck["active"]["inode"], "offset": new_offset}
+        now_year = datetime.datetime.now().year
+        event, dlq = parse_fortigate_line(raw, now_year)
+        if event is not None:
+            _write_event(ck, event, src)
+        else:
+            reason = dlq.get("reason", "parse_fail") if dlq else "parse_fail"
+            _write_dlq(ck, reason, raw, src)
+
+        ck["active"]["offset"] = int(new_offset)
+        offset = int(new_offset)
+
+        if (time.time() - start) >= max_seconds:
+            break
+
+    return processed
+
+
+def _flush_checkpoint(ck: Dict[str, Any]) -> None:
+    try:
+        save_checkpoint(ck)
+    except Exception:
+        ck["counters"]["checkpoint_fail_total"] += 1
+
+
+def main() -> int:
+    global _SHOULD_STOP
+
+    # signals
+    signal.signal(signal.SIGTERM, _handle_stop_signal)
+    signal.signal(signal.SIGINT, _handle_stop_signal)
+
+    _ensure_dirs()
+
+    ck = load_checkpoint()
+    mw = MetricsWindow()
+
+    last_metrics = _now_ts()
+    last_flush = _now_ts()
+
+    try:
+        while True:
+            if _SHOULD_STOP:
+                # graceful shutdown: flush checkpoint and exit 0
+                _flush_checkpoint(ck)
+                # best-effort final metrics
+                try:
+                    now = _now_ts()
+                    metric = mw.build_metrics(ck, now)
+                    append_metrics(now, metric)
+                except Exception:
+                    pass
+                return 0
+
+            n_rot = process_rotated_files(ck)
+            n_act = process_active_tail(ck, max_seconds=2.0)
+
+            now = _now_ts()
+            if now - last_flush >= CHECKPOINT_FLUSH_INTERVAL_SEC:
+                _flush_checkpoint(ck)
+                last_flush = now
+
+            if now - last_metrics >= METRICS_INTERVAL_SEC:
+                metric = mw.build_metrics(ck, now)
+                try:
+                    append_metrics(now, metric)
+                except Exception:
+                    ck["counters"]["write_fail_total"] += 1
+                last_metrics = now
+
+            # idle backoff to avoid busy loop
+            if n_rot == 0 and n_act == 0:
+                time.sleep(IDLE_SLEEP_SEC)
+
+    except KeyboardInterrupt:
+        _flush_checkpoint(ck)
+        return 0
+    except Exception:
+        # crash path: try to persist checkpoint for post-mortem, then exit non-zero
+        _flush_checkpoint(ck)
+        return 2
+
+
+if __name__ == "__main__":
+    rc = main()
+    raise SystemExit(rc)
+
+====================================================================================================
+FILE: edge/fortigate-ingest/bin/metrics.py
+====================================================================================================
+import os
+import time
+from typing import Any, Dict, Optional
+
+ACTIVE_PATH = "/data/fortigate-runtime/input/fortigate.log"
+
+class MetricsWindow:
+    def __init__(self) -> None:
+        self.last_emit_ts = int(time.time())
+        self.prev_counters: Optional[Dict[str, int]] = None
+
+    def _stat_active_size(self) -> Optional[int]:
+        try:
+            return os.stat(ACTIVE_PATH).st_size
+        except FileNotFoundError:
+            return None
+
+    def build_metrics(self, ck: Dict[str, Any], now_ts: int) -> Dict[str, Any]:
+        counters = ck.get("counters", {})
+        active = ck.get("active", {})
+
+        size_bytes = self._stat_active_size()
+        offset = active.get("offset", 0)
+        lag_bytes = None
+        if size_bytes is not None and isinstance(offset, int):
+            lag_bytes = size_bytes - offset
+
+        if self.prev_counters is None:
+            self.prev_counters = dict(counters)
+        dt = max(1, now_ts - self.last_emit_ts)
+
+        def delta(k: str) -> int:
+            return int(counters.get(k, 0)) - int(self.prev_counters.get(k, 0))
+
+        metric = {
+            "ts": now_ts,
+            "active_file_size_bytes": size_bytes,
+            "active_read_offset_bytes": offset,
+            "active_lag_bytes": lag_bytes,
+            "lines_in_total": counters.get("lines_in_total", 0),
+            "bytes_in_total": counters.get("bytes_in_total", 0),
+            "events_out_total": counters.get("events_out_total", 0),
+            "dlq_out_total": counters.get("dlq_out_total", 0),
+            "parse_fail_total": counters.get("parse_fail_total", 0),
+            "write_fail_total": counters.get("write_fail_total", 0),
+            "checkpoint_fail_total": counters.get("checkpoint_fail_total", 0),
+            "lines_in_per_sec": delta("lines_in_total") / dt,
+            "bytes_in_per_sec": delta("bytes_in_total") / dt,
+            "events_out_per_sec": delta("events_out_total") / dt,
+            "dlq_out_per_sec": delta("dlq_out_total") / dt,
+            "parse_fail_per_sec": delta("parse_fail_total") / dt,
+            "last_event_ts_seen": active.get("last_event_ts_seen")
+        }
+
+        self.prev_counters = dict(counters)
+        self.last_emit_ts = now_ts
+        return metric
+
+====================================================================================================
+FILE: edge/fortigate-ingest/bin/parser_fgt_v1.py
+====================================================================================================
+# FILE: Netops-causality-remediation/edge/fortigate-ingest/bin/parser_fgt_v1.py
+import datetime
+import hashlib
+import re
+from typing import Any, Dict, Optional, Tuple
+
+MONTHS = {
+    "Jan": 1, "Feb": 2, "Mar": 3, "Apr": 4, "May": 5, "Jun": 6,
+    "Jul": 7, "Aug": 8, "Sep": 9, "Oct": 10, "Nov": 11, "Dec": 12
+}
+
+SYSLOG_RE = re.compile(
+    r"^(?P<mon>[A-Z][a-z]{2})\s+(?P<day>\d{1,2})\s+(?P<time>\d{2}:\d{2}:\d{2})\s+(?P<host>\S+)\s+(?P<body>.*)$"
+)
+
+# 只保留“对安全/流量分析有价值、且常见”的 KV 子集，避免无限膨胀输出
+# 注意：这里把“设备识别/资产感知”相关字段补全，以支持后续 R450 态势感知/画像。
+KV_SUBSET_KEYS = [
+    # 时间/标识
+    "date", "time", "tz", "eventtime", "logid",
+
+    # 通用分类
+    "type", "subtype", "level", "vd", "action", "policyid", "policytype",
+
+    # 资产/设备
+    "devname", "devid",
+
+    # 连接/会话
+    "sessionid", "proto", "service", "srcip", "srcport", "srcintf", "srcintfrole",
+    "dstip", "dstport", "dstintf", "dstintfrole", "trandisp", "duration",
+
+    # 计数
+    "sentbyte", "rcvdbyte", "sentpkt", "rcvdpkt",
+
+    # 应用识别
+    "app", "appcat",
+
+    # 端点/地理/身份（经常用于溯源/资产识别）
+    "srcname", "dstcountry", "srccountry", "osname", "srcswversion",
+    "srcmac", "mastersrcmac", "srcserver",
+
+    # 资产指纹（你日志里实际会出现）
+    "srchwvendor", "devtype", "srcfamily", "srchwversion", "srchwmodel",
+
+    # 管理/认证类（system event）
+    "user", "status", "reason", "msg", "logdesc", "ui", "method",
+]
+
+def _has_binary_garbage(s: str) -> bool:
+    if "\x00" in s:
+        return True
+    bad = sum(1 for ch in s if ord(ch) < 9 or (11 <= ord(ch) < 32))
+    return bad > 5
+
+def parse_kv(body: str) -> Dict[str, str]:
+    """
+    Parse FortiGate kv pairs: key=value or key="value with spaces"
+    Supports backslash-escaped quotes inside quoted values.
+    """
+    out: Dict[str, str] = {}
+    i = 0
+    n = len(body)
+
+    while i < n:
+        while i < n and body[i] == " ":
+            i += 1
+        if i >= n:
+            break
+
+        k_start = i
+        while i < n and body[i] not in "= ":
+            i += 1
+        key = body[k_start:i]
+        if not key or i >= n or body[i] != "=":
+            break
+        i += 1  # skip '='
+
+        if i < n and body[i] == '"':
+            i += 1
+            v_chars = []
+            while i < n:
+                ch = body[i]
+                if ch == "\\" and i + 1 < n:
+                    v_chars.append(body[i + 1])
+                    i += 2
+                    continue
+                if ch == '"':
+                    i += 1
+                    break
+                v_chars.append(ch)
+                i += 1
+            value = "".join(v_chars)
+            while i < n and body[i] == " ":
+                i += 1
+        else:
+            v_start = i
+            while i < n and body[i] != " ":
+                i += 1
+            value = body[v_start:i]
+            while i < n and body[i] == " ":
+                i += 1
+
+        out[key] = value
+
+    return out
+
+def parse_event_ts(
+    kv: Dict[str, str],
+    default_year: int,
+    fallback_mon: int,
+    fallback_day: int,
+    fallback_time: str
+) -> Optional[str]:
+    """
+    event_ts 优先使用 kv 中的 date/time/tz 组合；如果解析失败，回退到 syslog 头的 月/日/时间。
+    event_ts 保持 ISO8601 字符串。
+    """
+    tz = kv.get("tz")
+    if tz:
+        tz_clean = tz.strip().strip('"')
+        if re.fullmatch(r"[+-]\d{4}", tz_clean):
+            tz_norm = tz_clean[:3] + ":" + tz_clean[3:]
+        else:
+            tz_norm = None
+    else:
+        tz_norm = None
+
+    date_s = kv.get("date")  # YYYY-MM-DD
+    time_s = kv.get("time")  # HH:MM:SS
+    if date_s and time_s:
+        try:
+            dt = datetime.datetime.fromisoformat(f"{date_s}T{time_s}")
+            if tz_norm:
+                sign = 1 if tz_norm[0] == "+" else -1
+                hh = int(tz_norm[1:3])
+                mm = int(tz_norm[4:6])
+                return dt.replace(
+                    tzinfo=datetime.timezone(datetime.timedelta(hours=sign * hh, minutes=sign * mm))
+                ).isoformat()
+            return dt.isoformat()
+        except Exception:
+            pass
+
+    try:
+        hh, mm, ss = [int(x) for x in fallback_time.split(":")]
+        dt = datetime.datetime(default_year, fallback_mon, fallback_day, hh, mm, ss)
+        if tz_norm:
+            sign = 1 if tz_norm[0] == "+" else -1
+            h = int(tz_norm[1:3])
+            m = int(tz_norm[4:6])
+            return dt.replace(
+                tzinfo=datetime.timezone(datetime.timedelta(hours=sign * h, minutes=sign * m))
+            ).isoformat()
+        return dt.isoformat()
+    except Exception:
+        return None
+
+def stable_event_id(raw_line: str) -> str:
+    h = hashlib.sha256(raw_line.encode("utf-8", errors="replace")).hexdigest()
+    return h[:32]
+
+def _to_int(x: Optional[str]) -> Optional[int]:
+    if x is None:
+        return None
+    try:
+        return int(x)
+    except Exception:
+        return None
+
+def _pick_kv_subset(kv: Dict[str, str]) -> Dict[str, str]:
+    out: Dict[str, str] = {}
+    for k in KV_SUBSET_KEYS:
+        v = kv.get(k)
+        if v is not None:
+            out[k] = v
+    return out
+
+def _bytes_total(sent: Optional[int], rcvd: Optional[int]) -> Optional[int]:
+    if sent is None and rcvd is None:
+        return None
+    return int(sent or 0) + int(rcvd or 0)
+
+def _pkts_total(sentpkt: Optional[int], rcvdpkt: Optional[int]) -> Optional[int]:
+    if sentpkt is None and rcvdpkt is None:
+        return None
+    return int(sentpkt or 0) + int(rcvdpkt or 0)
+
+def _device_key(kv: Dict[str, str]) -> Optional[str]:
+    """
+    尽量稳定地把事件归属到“设备/终端”，用于后续 R450 聚合：
+    优先 mac，其次 mastersrcmac，其次 srcname，其次 srcip。
+    """
+    for k in ["srcmac", "mastersrcmac", "srcname", "srcip"]:
+        v = kv.get(k)
+        if v:
+            return v
+    return None
+
+def parse_fortigate_line(raw_line: str, now_year: int) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+    """
+    Return (event, dlq). One of them is None.
+
+    Notes:
+    - Event output does NOT include full raw line to avoid output amplification.
+    - DLQ keeps raw for debugging/forensics.
+    - schema_version=1 保持不变；新增字段均为可选（None 或缺失不会破坏旧消费方）。
+    """
+    line = raw_line.rstrip("\n")
+    if not line:
+        return None, {"reason": "empty_line", "raw": raw_line}
+
+    if _has_binary_garbage(line):
+        return None, {"reason": "non_text_or_binary", "raw": raw_line}
+
+    m = SYSLOG_RE.match(line)
+    if not m:
+        return None, {"reason": "syslog_header_parse_fail", "raw": raw_line}
+
+    mon = m.group("mon")
+    day = int(m.group("day"))
+    tstr = m.group("time")
+    host = m.group("host")
+    body = m.group("body")
+
+    mon_i = MONTHS.get(mon)
+    if not mon_i:
+        return None, {"reason": "invalid_month", "raw": raw_line}
+
+    try:
+        kv = parse_kv(body)
+    except Exception:
+        return None, {"reason": "kv_parse_exception", "raw": raw_line}
+
+    event_ts = parse_event_ts(kv, now_year, mon_i, day, tstr)
+
+    sentbyte = _to_int(kv.get("sentbyte"))
+    rcvdbyte = _to_int(kv.get("rcvdbyte"))
+    sentpkt = _to_int(kv.get("sentpkt"))
+    rcvdpkt = _to_int(kv.get("rcvdpkt"))
+
+    # 基础字段（保持原字段不变）
+    event: Dict[str, Any] = {
+        "schema_version": 1,
+        "event_id": stable_event_id(raw_line),
+        "host": host,
+        "event_ts": event_ts,
+
+        "type": kv.get("type"),
+        "subtype": kv.get("subtype"),
+        "level": kv.get("level"),
+
+        "devname": kv.get("devname"),
+        "devid": kv.get("devid"),
+        "vd": kv.get("vd"),
+
+        "action": kv.get("action"),
+        "policyid": _to_int(kv.get("policyid")),
+        "policytype": kv.get("policytype"),
+
+        "sessionid": _to_int(kv.get("sessionid")),
+        "proto": _to_int(kv.get("proto")),
+        "service": kv.get("service"),
+
+        "srcip": kv.get("srcip"),
+        "srcport": _to_int(kv.get("srcport")),
+        "srcintf": kv.get("srcintf"),
+        "srcintfrole": kv.get("srcintfrole"),
+
+        "dstip": kv.get("dstip"),
+        "dstport": _to_int(kv.get("dstport")),
+        "dstintf": kv.get("dstintf"),
+        "dstintfrole": kv.get("dstintfrole"),
+
+        "sentbyte": sentbyte,
+        "rcvdbyte": rcvdbyte,
+        "sentpkt": sentpkt,
+        "rcvdpkt": rcvdpkt,
+
+        # 新增：便于 R450 直接做流量/会话统计
+        "bytes_total": _bytes_total(sentbyte, rcvdbyte),
+        "pkts_total": _pkts_total(sentpkt, rcvdpkt),
+
+        "parse_status": "ok",
+    }
+
+    # 时间/标识
+    event["logid"] = kv.get("logid")
+    event["eventtime"] = kv.get("eventtime")  # 先保留字符串，避免溢出/误解析
+    event["tz"] = kv.get("tz")
+
+    # system event（管理登录/审计）
+    event["logdesc"] = kv.get("logdesc")
+    event["user"] = kv.get("user")
+    event["ui"] = kv.get("ui")
+    event["method"] = kv.get("method")
+    event["status"] = kv.get("status")
+    event["reason"] = kv.get("reason")
+    event["msg"] = kv.get("msg")
+
+    # traffic event（会话/策略/应用）
+    event["trandisp"] = kv.get("trandisp")
+    event["app"] = kv.get("app")
+    event["appcat"] = kv.get("appcat")
+    event["duration"] = _to_int(kv.get("duration"))
+
+    # 端点/地理/资产特征（用于“精确到设备”）
+    event["srcname"] = kv.get("srcname")
+    event["srccountry"] = kv.get("srccountry")
+    event["dstcountry"] = kv.get("dstcountry")
+
+    event["osname"] = kv.get("osname")
+    event["srcswversion"] = kv.get("srcswversion")
+
+    event["srcmac"] = kv.get("srcmac")
+    event["mastersrcmac"] = kv.get("mastersrcmac")
+    event["srcserver"] = _to_int(kv.get("srcserver"))
+
+    # 新增：资产指纹（你日志样本里会出现）
+    event["srchwvendor"] = kv.get("srchwvendor")
+    event["devtype"] = kv.get("devtype")
+    event["srcfamily"] = kv.get("srcfamily")
+    event["srchwversion"] = kv.get("srchwversion")
+    event["srchwmodel"] = kv.get("srchwmodel")
+
+    # 新增：稳定设备 key（R450 聚合主键）
+    event["src_device_key"] = _device_key(kv)
+
+    # 保留一份 KV 子集（未来扩展/回溯分析）
+    event["kv_subset"] = _pick_kv_subset(kv)
+
+    # partial 判定：type/subtype 缺失则标记为 partial
+    core_missing = (event.get("type") is None) or (event.get("subtype") is None)
+    if core_missing:
+        event["parse_status"] = "partial"
+
+    return event, None
+
+====================================================================================================
+FILE: edge/fortigate-ingest/bin/sink_jsonl.py
+====================================================================================================
+import json
+import os
+import time
+from typing import Any, Dict
+
+PARSED_DIR = "/data/fortigate-runtime/output/parsed"
+EVENTS_PREFIX = "events"
+DLQ_PREFIX = "dlq"
+METRICS_PREFIX = "metrics"
+
+
+def _hour_key(ts_epoch: int) -> str:
+    t = time.localtime(ts_epoch)
+    return f"{t.tm_year:04d}{t.tm_mon:02d}{t.tm_mday:02d}-{t.tm_hour:02d}"
+
+
+def _path_for(prefix: str, hour_key: str) -> str:
+    return os.path.join(PARSED_DIR, f"{prefix}-{hour_key}.jsonl")
+
+
+def _append_line(path: str, line: str) -> None:
+    os.makedirs(PARSED_DIR, exist_ok=True)
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(line)
+        f.flush()
+        os.fsync(f.fileno())
+
+
+def append_jsonl(prefix: str, ts_epoch: int, obj: Dict[str, Any]) -> None:
+    hour_key = _hour_key(ts_epoch)
+    path = _path_for(prefix, hour_key)
+    line = json.dumps(obj, ensure_ascii=False, separators=(",", ":"), sort_keys=False) + "\n"
+    _append_line(path, line)
+
+
+def append_event(ts_epoch: int, event: Dict[str, Any]) -> None:
+    append_jsonl(EVENTS_PREFIX, ts_epoch, event)
+
+
+def append_dlq(ts_epoch: int, dlq: Dict[str, Any]) -> None:
+    append_jsonl(DLQ_PREFIX, ts_epoch, dlq)
+
+
+def append_metrics(ts_epoch: int, metric_obj: Dict[str, Any]) -> None:
+    append_jsonl(METRICS_PREFIX, ts_epoch, metric_obj)
+
+====================================================================================================
+FILE: edge/fortigate-ingest/bin/source_file.py
+====================================================================================================
+import gzip
+import os
+import re
+import time
+from typing import Dict, Generator, List, Optional, Tuple
+
+DIR = "/data/fortigate-runtime/input"
+ACTIVE_PATH = "/data/fortigate-runtime/input/fortigate.log"
+
+ROTATED_RE = re.compile(r"^fortigate\.log-(\d{8}-\d{6})(?:\.gz)?$")
+
+
+def list_rotated_files() -> List[str]:
+    files: List[str] = []
+    try:
+        for name in os.listdir(DIR):
+            if ROTATED_RE.match(name):
+                files.append(os.path.join(DIR, name))
+    except FileNotFoundError:
+        return []
+
+    def key_fn(p: str) -> str:
+        m = ROTATED_RE.match(os.path.basename(p))
+        return m.group(1) if m else "99999999-999999"
+
+    files.sort(key=key_fn)
+    return files
+
+
+def stat_file(path: str) -> Tuple[int, int, int]:
+    st = os.stat(path)
+    return (st.st_ino, st.st_size, int(st.st_mtime))
+
+
+def read_whole_file_lines(path: str) -> Generator[Tuple[str, Dict], None, None]:
+    inode, size, mtime = stat_file(path)
+    is_gz = path.endswith(".gz")
+    if is_gz:
+        with gzip.open(path, "rt", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                yield line, {"path": path, "inode": inode, "offset": None, "size": size, "mtime": mtime}
+    else:
+        offset = 0
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                yield line, {"path": path, "inode": inode, "offset": offset, "size": size, "mtime": mtime}
+                offset += len(line.encode("utf-8", errors="replace"))
+
+
+def follow_active_binary(offset: int, max_wait_sec: float = 0.5) -> Generator[Tuple[str, int], None, None]:
+    """
+    Tail ACTIVE_PATH from byte offset. Yield (line, new_offset).
+    IMPORTANT: This generator will return if no new bytes arrive within max_wait_sec.
+    This allows the caller (main loop) to keep control (rotate scan, checkpoint flush, metrics emit).
+    """
+    start_wait = time.time()
+
+    with open(ACTIVE_PATH, "rb") as f:
+        f.seek(offset, os.SEEK_SET)
+        buf = b""
+        while True:
+            chunk = f.read(8192)
+            if not chunk:
+                if (time.time() - start_wait) >= max_wait_sec:
+                    return
+                time.sleep(0.05)
+                continue
+
+            start_wait = time.time()
+            buf += chunk
+
+            while True:
+                nl = buf.find(b"\n")
+                if nl == -1:
+                    break
+
+                line_bytes = buf[:nl + 1]
+                buf = buf[nl + 1:]
+                offset += len(line_bytes)
+                line = line_bytes.decode("utf-8", errors="replace")
+                yield line, offset
+
+
+def active_inode() -> Optional[int]:
+    try:
+        return os.stat(ACTIVE_PATH).st_ino
+    except FileNotFoundError:
+        return None
+
+
+def active_size() -> Optional[int]:
+    try:
+        return os.stat(ACTIVE_PATH).st_size
+    except FileNotFoundError:
+        return None
+
+====================================================================================================
+FILE: export.py
+====================================================================================================
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import os
+from pathlib import Path
+
+# ====== 放在仓库根目录运行：/data/Netops-causality-remediation/export.py ======
+
+ROOT_DIR = Path(".").resolve()
+OUT_FILE = ROOT_DIR / "code_snapshot.txt"
+
+# 只导出这些后缀（按你这个仓库：Python + Dockerfile + YAML/Conf + Docs + Shell）
+ALLOW_EXTS = {
+    ".py",
+    ".sh", ".bash",
+    ".yaml", ".yml",
+    ".json",
+    ".toml",
+    ".ini", ".cfg", ".conf",
+    ".md", ".txt",
+    ".env",  # 如果你确实希望导出；不想导出可删掉
+}
+
+# 一些“无后缀但很关键”的文件名
+ALLOW_BASENAMES = {
+    "Dockerfile",
+    "Makefile",
+    "README",
+    "LICENSE",
+}
+
+# 跳过的目录名（强约束）
+SKIP_DIR_NAMES = {
+    ".git", ".github",
+    "__pycache__", ".pytest_cache", ".mypy_cache",
+    ".venv", "venv", ".tox",
+    "node_modules",
+    "dist", "build", "target",
+    ".idea", ".vscode",
+    ".DS_Store",
+}
+
+# 跳过特定路径前缀（相对 ROOT_DIR）
+SKIP_REL_PREFIXES = {
+    Path("edge") / "fortigate-ingest" / "bin" / "__pycache__",
+}
+
+# 单文件最大读取大小（防止把大日志/大模型/大二进制扫进去）
+MAX_FILE_BYTES = 2 * 1024 * 1024  # 2MB
+
+
+def should_skip_dir(dirpath: Path) -> bool:
+    name = dirpath.name
+    if name in SKIP_DIR_NAMES:
+        return True
+    return False
+
+
+def is_allowed_file(p: Path) -> bool:
+    # 跳过明显的二进制/缓存
+    if p.name.endswith((".pyc", ".pyo")):
+        return False
+
+    # 无后缀但关键的文件
+    if p.suffix == "" and p.name in ALLOW_BASENAMES:
+        return True
+
+    # 有后缀白名单
+    if p.suffix.lower() in ALLOW_EXTS:
+        return True
+
+    # 允许 Dockerfile.* / *.service / *.timer 等“重要但不在白名单后缀里”的场景
+    if p.name.startswith("Dockerfile"):
+        return True
+
+    return False
+
+
+def is_under_skipped_prefix(rel: Path) -> bool:
+    for pref in SKIP_REL_PREFIXES:
+        try:
+            rel.relative_to(pref)
+            return True
+        except ValueError:
+            pass
+    return False
+
+
+def safe_read_text(file_path: Path) -> str:
+    # 先按 utf-8，失败再 latin-1，避免直接崩
+    try:
+        return file_path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return file_path.read_text(encoding="latin-1", errors="replace")
+
+
+def build_tree_preview(root: Path) -> str:
+    # 简易 tree（不依赖系统 tree 命令）
+    lines = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dp = Path(dirpath)
+        rel_dp = dp.relative_to(root)
+
+        # 过滤目录
+        dirnames[:] = [d for d in dirnames if not should_skip_dir(Path(d))]
+        # 过滤前缀目录（rel 前缀）
+        if rel_dp != Path(".") and is_under_skipped_prefix(rel_dp):
+            dirnames[:] = []
+            continue
+
+        indent = "  " * (len(rel_dp.parts) - (0 if rel_dp == Path(".") else 0))
+        # 根目录不打印 "."
+        if rel_dp != Path("."):
+            lines.append(f"{indent}{rel_dp.name}/")
+
+        # 文件
+        for fn in sorted(filenames):
+            p = dp / fn
+            rel = p.relative_to(root)
+            if is_under_skipped_prefix(rel.parent):
+                continue
+            if is_allowed_file(p):
+                lines.append(f"{indent}  {fn}")
+
+    return "\n".join(lines) + "\n"
+
+
+def main():
+    collected = []
+
+    for dirpath, dirnames, filenames in os.walk(ROOT_DIR):
+        dp = Path(dirpath)
+        rel_dp = dp.relative_to(ROOT_DIR)
+
+        # 跳过目录名
+        dirnames[:] = [d for d in dirnames if not should_skip_dir(Path(d))]
+        # 跳过前缀路径
+        if rel_dp != Path(".") and is_under_skipped_prefix(rel_dp):
+            dirnames[:] = []
+            continue
+
+        for fn in filenames:
+            p = dp / fn
+            rel = p.relative_to(ROOT_DIR)
+
+            if is_under_skipped_prefix(rel.parent):
+                continue
+            if not is_allowed_file(p):
+                continue
+
+            # 跳过超大文件
+            try:
+                size = p.stat().st_size
+            except OSError:
+                continue
+            if size > MAX_FILE_BYTES:
+                continue
+
+            collected.append((str(rel), p))
+
+    collected.sort(key=lambda x: x[0])
+
+    with OUT_FILE.open("w", encoding="utf-8") as out:
+        out.write("# Netops-causality-remediation code snapshot\n")
+        out.write(f"# Root: {ROOT_DIR}\n")
+        out.write(f"# Files: {len(collected)}\n\n")
+
+        out.write("## TREE (filtered)\n")
+        out.write(build_tree_preview(ROOT_DIR))
+        out.write("\n\n")
+
+        for rel, p in collected:
+            out.write("=" * 100 + "\n")
+            out.write(f"FILE: {rel}\n")
+            out.write("=" * 100 + "\n")
+            out.write(safe_read_text(p))
+            if not safe_read_text(p).endswith("\n"):
+                out.write("\n")
+            out.write("\n")
+
+    print(f"[OK] Exported {len(collected)} files -> {OUT_FILE}")
+
+
+if __name__ == "__main__":
+    main()
+
+
