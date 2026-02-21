@@ -1,45 +1,52 @@
-# Towards NetOps： AIOps Driven 分布式深度根因追踪与智能自动化处置系统
+# Towards NetOps: Hybrid AIOps-Driven Distributed Deep Root-Cause Tracing and Intelligent Automated Remediation System
+Hybrid AIOps Platform: Deterministic Streaming Core + CPU Local LLM (On-Demand) + Multi-Agent Orchestration
 
-该项目旨在构建一个分布式架构的，面向复杂网络运维场景的分布式 AIOps 引擎，通过边缘事实日志沉淀与核心流式关联推理，实现异常因果追踪与证据驱动运维决策支持
+This project aims to build a **distributed AIOps platform (Towards NetOps)** for complex network operations scenarios, following the main pipeline of **Edge Fact Ingestion → Core Streaming Analytics → LLM-Augmented Reasoning → Remediation Loop**, and progressively delivering an engineering capability evolution from anomaly detection, evidence-chain attribution, to remediation recommendation and execution control. The platform does not target “real-time LLM inference on all logs”; instead, it is built on a stable data plane and explainable evidence flow, and performs on-demand intelligent enhancement analysis on high-value anomaly clusters at the core side, so as to achieve a practical balance among cost, real-time performance, and operability.
 
-## 1.1 项目定位与当前架构边界
-项目当架构围绕 **r230（边缘采集）→ r450（核心数据平面与分析处理）** 展开，即在边缘侧完成近源采集与事实化，在核心侧承载后续流式处理、关联分析、证据链归因与自动化处置能力的实现。意味着本项目已完成平台建设中最关键的输入面落地工作，并进入面向核心能力扩展的架构推进阶段。
+The system adopts a layered architecture of **Edge Ingestion + Core Analytics**. The edge side is responsible for near-source log collection, structured fact eventization, audit trace retention, and replayable persistence, converting raw device logs into a sustainably consumable fact event stream; the core side is responsible for streaming data plane hosting, event aggregation and correlation analysis, evidence-chain construction, and, on top of that, introducing an **LLM-augmented analysis layer** for alert explanation, situation summarization, attribution assistance, and Runbook draft generation. This augmentation layer runs in **resident service + rate-limited queue** mode: rule/streaming modules perform real-time detection and high-value anomaly filtering, while the LLM only performs low-concurrency, on-demand inference on alert-level context, avoiding resource contention and latency impact on the main path.
 
-当前处于 **边缘事实接入层（Edge Fact Ingestion Layer）已部署并稳定运行**、**核心分析与处置层（Core Analytics / Causality / Remediation）持续建设中** 的阶段。系统运行于 **k3s** 集群；其中 `edge` 边缘侧 `fortigate-ingest` 组件 已完成容器化部署并持续运行，承担 FortiGate 日志的边缘侧接入与事实化处理任务。当前节点角色划分为：**netops-node2（r230）负责边缘接入**，**netops-node1（r450）作为核心数据平面与分析侧承载节点**。已进入集群运行态的 AIOps 平台基础组件阶段。
+Under current resource constraints (no GPU on the core side, CPU-only inference), the technical route of this project is explicitly **“deterministic streaming analysis as the primary path + on-demand LLM augmentation”**: real-time detection, base aggregation, and correlation computation are handled by rule/stream processing modules; the LLM is responsible for explanation and plan generation on compressed, high-value evidence contexts. This design allows the platform to gradually evolve toward Multiple Agent + LLM collaborative analysis and automated remediation loop capabilities without relying on local training or continuously costly API calls.
+
+The planned construction sequence of the project is as follows:  
+**Phase 1** completes the engineering implementation of the edge fact ingestion layer (FortiGate logs and potentially additional network device logs), ensuring auditable, recoverable, and replayable inputs;  
+**Phase 2** establishes the data plane and minimal streaming consumption pipeline on the core side, completing event transmission decoupling and basic aggregation analytics;  
+**Phase 3** progressively introduces Multiple Agent + LLM for correlation analysis, network situational awareness, evidence-chain attribution, and automated self-healing Runbook generation based on AIOps principles;  
+**Phase 4** extends to remediation recommendations, human-approved execution, and low-intrusion automated self-healing under explainable and verifiable constraints.
+
+## 1.1 Project Positioning and Current Architecture Boundary
+The current project architecture is centered around **r230 (edge collection) → r450 (core data plane and analytics processing)**, i.e., near-source collection and factization on the edge side, and subsequent streaming processing, correlation analysis, evidence-chain attribution, and automated remediation capability implementation on the core side. This means the project has completed the most critical input-plane landing work in platform construction and has entered the architecture advancement stage oriented toward core capability expansion.
+
+The project is currently at the stage where the **Edge Fact Ingestion Layer has been deployed and is running stably**, while the **Core Analytics / Causality / Remediation layer is under continuous development**. The system runs on a **k3s** cluster; the `fortigate-ingest` component on the `edge` side has been containerized, deployed, and is continuously running, undertaking edge-side ingestion and factization of FortiGate logs. The current node role split is: **netops-node2 (r230) for edge ingestion**, and **netops-node1 (r450) as the hosting node for the core data plane and analytics side**. The platform has entered the cluster runtime stage for foundational AIOps components.
 
 > [!IMPORTANT]
-> 当前阶段的架构重点是以已运行的边缘接入组件为基础，向核心侧数据平面与分析能力扩展
+> The current architecture focus is to extend toward the core-side data plane and analytics capabilities based on the already-running edge ingestion component.
 
-节点角色划分如下：
-- **netops-node2（r230）**：边缘接入侧（Edge Ingestion，已完成Ingest Pod开发与部署，并稳定运行）
-- **netops-node1（r450）**：核心侧（Data Plane / Core Analytics，正在持续建设中）
+Node role allocation is as follows:
+- **netops-node2 (r230)**: Edge ingestion side (Edge Ingestion; Ingest Pod development and deployment completed, running stably)
+- **netops-node1 (r450)**: Core side (Data Plane / Core Analytics; under continuous development)
 
+## 1.2 Currently Implemented Components (Edge / FortiGate Ingestion)
+`edge/fortigate-ingest` has been containerized, deployed, and is continuously running in the k3s cluster, and currently performs the following responsibilities:
 
+- Ingest FortiGate syslog inputs (active log + rotated logs, including `.gz`)
+- Process historical backfill and near-real-time tailing in a fixed order (`rotated → active`)
+- Parse syslog header and FortiGate `key=value` payload
+- Perform field type normalization and structured event generation
+- Output directly consumable fact event streams (JSONL)
+- Output DLQ and ingest metrics (for bad-sample isolation and runtime observability)
+- Persist checkpoints (including `inode/offset` and `completed` dedup ledger), supporting restart recovery, rotation handling, and traceable replay localization
 
-
-## 1.2 当前已开发组件（Edge / FortiGate Ingestion）
-`edge/fortigate-ingest` 已在 k3s 集群中完成容器化部署并持续运行，当前承担以下职责：
-
-- 接入 FortiGate syslog 输入（active log + rotated log，含 `.gz`）
-- 按既定顺序处理历史补偿与准实时跟读（rotated → active）
-- 解析 syslog header 与 FortiGate `key=value` payload
-- 完成字段类型标准化与结构化事件生成
-- 输出可直接消费的事实事件流（JSONL）
-- 输出 DLQ 与 ingest metrics（用于异常样本隔离与运行状态观测）
-- 持久化 checkpoint（含 `inode/offset` 与 completed 去重账本），支持重启恢复、轮转处理与可追溯回放定位
-
-当前边缘侧已经基于总体环境路由器形成稳定的 **事实事件生产链路**，为后续核心侧流式消费、关联分析与根因推理提供统一输入
-
+The edge side has already formed a stable **fact event production pipeline** based on the overall router environment, providing unified input for subsequent core-side streaming consumption, correlation analysis, and root-cause reasoning.
 
 ---
-## 2. Edge 边缘侧 组件
-### 2.1 Ingest 组件  
-> ## FortiGate Log Input / Ingest / Parsed Output Specification
-原始日志（`/data/fortigate-runtime/input/fortigate.log`）格式分析
-FortiGate 日志输入格式、结构化事件输出格式（JSONL）、字段语义及 ingest 处理链路，用于数据接入、分析开发、排障审计与后续流式处理对接。
+## 2. Edge Components
+### 2.1 Ingest Component
+> ## FortiGate Log Input / Ingest / Parsed Output Specification  
+> Raw log (`/data/fortigate-runtime/input/fortigate.log`) format analysis  
+> FortiGate log input format, structured event output format (JSONL), field semantics, and ingest processing pipeline, for data ingestion, analytics development, troubleshooting audit, and downstream streaming integration.
 
 ### 2.1.1 Raw FortiGate Log Format (Input)
-`edge/fortigate-ingest` 的输入不是单一文件，而是 **同一目录下的一组 FortiGate 日志文件集合**：当前持续追加写入的 active 文件 `fortigate.log`，以及由外部轮转机制生成的历史文件 `fortigate.log-YYYYMMDD-HHMMSS` 和 `fortigate.log-YYYYMMDD-HHMMSS.gz`。ingest 在启动与主循环中会先扫描并按文件名时间戳顺序处理所有匹配命名规则的 rotated 文件（用于补齐历史日志），随后再基于 checkpoint 中记录的 `active.inode + active.offset` 对 `fortigate.log` 执行增量 tail（用于准实时接入新日志）。rotated 文件采用整文件读取（`.gz` 通过 gzip 解压后逐行读取，`source.offset=null`；非 `.gz` rotated 记录逐行 offset），active 文件采用按字节 offset 的持续跟读；在运行过程中，主循环会周期性重新扫描 rotated 列表并结合 `completed(path|inode|size|mtime)` 去重账本避免重复补历史，同时对 active 文件通过 `inode` 变化与文件大小/offset 状态处理轮转切换与截断恢复。该处理模型的职责边界是：**ingest 负责识别并消费 active/rotated 输入集合，外部组件负责产生日志轮转文件**。
+The input of `edge/fortigate-ingest` is not a single file, but **a set of FortiGate log files in the same directory**: the continuously appended active file `fortigate.log`, plus historical files generated by an external rotation mechanism, `fortigate.log-YYYYMMDD-HHMMSS` and `fortigate.log-YYYYMMDD-HHMMSS.gz`. On startup and in the main loop, ingest first scans and processes all rotated files matching the naming rule in filename timestamp order (for historical log backfill), and then performs incremental tailing on `fortigate.log` using `active.inode + active.offset` recorded in the checkpoint (for near-real-time ingestion of new logs). Rotated files are read as whole files (`.gz` is read line by line after gzip decompression with `source.offset=null`; non-`.gz` rotated files record per-line offsets), while the active file is continuously tailed by byte offset; during runtime, the main loop periodically rescans the rotated list and uses the `completed(path|inode|size|mtime)` dedup ledger to avoid duplicate backfill, while handling active-file rotation switch and truncation recovery through `inode` changes and file size/offset state. The responsibility boundary of this processing model is: **ingest identifies and consumes the active/rotated input set, while an external component is responsible for generating rotated log files**.
 
 - **Active log**
   - `/data/fortigate-runtime/input/fortigate.log`
@@ -49,154 +56,206 @@ FortiGate 日志输入格式、结构化事件输出格式（JSONL）、字段�
 
 ### Line Format
 
-每行日志由两部分组成：
-*Input sample（raw）**：证明原始日志具备可直接抽取的网络语义 + 资产画像语义（接口、策略、动作、设备厂商/类型/OS/MAC）
-1. **Syslog header** - 4 tokens 维度
-2. **FortiGate key-value payload** - 43 维度
-### Input log raw 字段清单（43 个FortiGate KV字段 + 4 个 syslog header 子字段）
+Each log line consists of two parts:  
+*Input sample (raw)*: demonstrates that the raw log contains directly extractable network semantics + asset profiling semantics (interface, policy, action, device vendor/type/OS/MAC)
+
+1. **Syslog header** - 4-token dimension
+2. **FortiGate key-value payload** - 43-token dimension
+
+### Input raw log field list (43 FortiGate KV fields + 4 syslog header subfields)
 
 **Example (real sample):**
 ```text
 Feb 21 15:45:27 _gateway date=2026-02-21 time=15:45:26 devname="DAHUA_FORTIGATE" devid="FG100ETK20014183" logid="0001000014" type="traffic" subtype="local" level="notice" vd="root" eventtime=1771685127249713472 tz="+0100" srcip=192.168.16.41 srcname="es-73847E56DA65" srcport=48689 srcintf="LACP" srcintfrole="lan" dstip=255.255.255.255 dstport=48689 dstintf="unknown0" dstintfrole="undefined" sessionid=1211202700 proto=17 action="deny" policyid=0 policytype="local-in-policy" service="udp/48689" dstcountry="Reserved" srccountry="Reserved" trandisp="noop" app="udp/48689" duration=0 sentbyte=0 rcvdbyte=0 sentpkt=0 appcat="unscanned" srchwvendor="Samsung" devtype="Phone" srcfamily="Galaxy" osname="Android" srcswversion="16" mastersrcmac="78:66:9d:a3:4f:51" srcmac="78:66:9d:a3:4f:51" srcserver=0
 ```
+Input field analysis
+| Field Name     | Sample Value          | Purpose                                                   |
+| -------------- | --------------------- | --------------------------------------------------------- |
+| `syslog_month` | `Feb`                 | Syslog header time (month)                                |
+| `syslog_day`   | `21`                  | Syslog header time (day)                                  |
+| `syslog_time`  | `15:45:27`            | Syslog receive time (second-level)                        |
+| `host`         | `_gateway`            | Syslog sender hostname                                    |
+| `date`         | `2026-02-21`          | FortiGate event date (business time)                      |
+| `time`         | `15:45:26`            | FortiGate event time (business time)                      |
+| `devname`      | `DAHUA_FORTIGATE`     | Firewall device name                                      |
+| `devid`        | `FG100ETK20014183`    | Firewall unique device ID                                 |
+| `logid`        | `0001000014`          | FortiGate log type ID                                     |
+| `type`         | `traffic`             | Log primary category (traffic)                            |
+| `subtype`      | `local`               | Log subtype (local-plane traffic)                         |
+| `level`        | `notice`              | Event level                                               |
+| `vd`           | `root`                | VDOM name                                                 |
+| `eventtime`    | `1771685127249713472` | High-precision native event timestamp                     |
+| `tz`           | `+0100`               | Time zone                                                 |
+| `srcip`        | `192.168.16.41`       | Source IP                                                 |
+| `srcname`      | `es-73847E56DA65`     | Source name / endpoint identifier                         |
+| `srcport`      | `48689`               | Source port                                               |
+| `srcintf`      | `LACP`                | Source interface                                          |
+| `srcintfrole`  | `lan`                 | Source interface role                                     |
+| `dstip`        | `255.255.255.255`     | Destination IP (broadcast address)                        |
+| `dstport`      | `48689`               | Destination port                                          |
+| `dstintf`      | `unknown0`            | Destination interface (local-plane / special target clue) |
+| `dstintfrole`  | `undefined`           | Destination interface role                                |
+| `sessionid`    | `1211202700`          | Session ID (correlation key)                              |
+| `proto`        | `17`                  | Protocol number (UDP)                                     |
+| `action`       | `deny`                | Action result (deny)                                      |
+| `policyid`     | `0`                   | Policy ID                                                 |
+| `policytype`   | `local-in-policy`     | Matched policy type (local-plane)                         |
+| `service`      | `udp/48689`           | Service / port label                                      |
+| `dstcountry`   | `Reserved`            | Destination country (reserved address space)              |
+| `srccountry`   | `Reserved`            | Source country (reserved address space)                   |
+| `trandisp`     | `noop`                | Transport / processing status information                 |
+| `app`          | `udp/48689`           | Application identification result (port-level)            |
+| `duration`     | `0`                   | Session duration                                          |
+| `sentbyte`     | `0`                   | Sent bytes                                                |
+| `rcvdbyte`     | `0`                   | Received bytes                                            |
+| `sentpkt`      | `0`                   | Sent packets                                              |
+| `appcat`       | `unscanned`           | Application category status                               |
+| `srchwvendor`  | `Samsung`             | Source hardware vendor (asset profile)                    |
+| `devtype`      | `Phone`               | Device type (asset profile)                               |
+| `srcfamily`    | `Galaxy`              | Device family (asset profile)                             |
+| `osname`       | `Android`             | OS name (asset profile)                                   |
+| `srcswversion` | `16`                  | OS/software version (asset profile)                       |
+| `mastersrcmac` | `78:66:9d:a3:4f:51`   | Master source MAC (device identity normalization clue)    |
+| `srcmac`       | `78:66:9d:a3:4f:51`   | Source MAC (device identity normalization clue)           |
+| `srcserver`    | `0`                   | Device role hint (endpoint / non-server)                  |
 
-Input 字段分析（
-| 字段名            | 样本值                   | 作用                   |
-| -------------- | --------------------- | -------------------- |
-| `syslog_month` | `Feb`      | syslog 头时间（月份）  |
-| `syslog_day`   | `21`       | syslog 头时间（日期）  |
-| `syslog_time`  | `15:45:27` | syslog 接收时间（秒级） |
-| `host`         | `_gateway` | syslog 发送主机名    |
-| `date`         | `2026-02-21`          | FortiGate 事件日期（业务时间） |
-| `time`         | `15:45:26`            | FortiGate 事件时间（业务时间） |
-| `devname`      | `DAHUA_FORTIGATE`     | 防火墙设备名               |
-| `devid`        | `FG100ETK20014183`    | 防火墙设备唯一 ID           |
-| `logid`        | `0001000014`          | FortiGate 日志类型 ID    |
-| `type`         | `traffic`             | 日志主类（流量类）            |
-| `subtype`      | `local`               | 日志子类（本机面 traffic）    |
-| `level`        | `notice`              | 事件等级                 |
-| `vd`           | `root`                | VDOM 名称              |
-| `eventtime`    | `1771685127249713472` | 高精度原生事件时间戳           |
-| `tz`           | `+0100`               | 时区                   |
-| `srcip`        | `192.168.16.41`       | 源 IP                 |
-| `srcname`      | `es-73847E56DA65`     | 源端名称/终端标识            |
-| `srcport`      | `48689`               | 源端口                  |
-| `srcintf`      | `LACP`                | 源接口                  |
-| `srcintfrole`  | `lan`                 | 源接口角色                |
-| `dstip`        | `255.255.255.255`     | 目的 IP（广播地址）          |
-| `dstport`      | `48689`               | 目的端口                 |
-| `dstintf`      | `unknown0`            | 目的接口（本机面/特殊目标线索）     |
-| `dstintfrole`  | `undefined`           | 目的接口角色               |
-| `sessionid`    | `1211202700`          | 会话 ID（关联键）           |
-| `proto`        | `17`                  | 协议号（UDP）             |
-| `action`       | `deny`                | 动作结果（拒绝）             |
-| `policyid`     | `0`                   | 策略 ID                |
-| `policytype`   | `local-in-policy`     | 命中策略类型（本机面）          |
-| `service`      | `udp/48689`           | 服务/端口标签              |
-| `dstcountry`   | `Reserved`            | 目的国家（保留地址）           |
-| `srccountry`   | `Reserved`            | 源国家（保留地址）            |
-| `trandisp`     | `noop`                | 传输/处理状态信息            |
-| `app`          | `udp/48689`           | 应用识别结果（端口级）          |
-| `duration`     | `0`                   | 会话持续时长               |
-| `sentbyte`     | `0`                   | 发送字节数                |
-| `rcvdbyte`     | `0`                   | 接收字节数                |
-| `sentpkt`      | `0`                   | 发送包数                 |
-| `appcat`       | `unscanned`           | 应用分类状态               |
-| `srchwvendor`  | `Samsung`             | 源端硬件厂商（资产画像）         |
-| `devtype`      | `Phone`               | 设备类型（资产画像）           |
-| `srcfamily`    | `Galaxy`              | 设备家族（资产画像）           |
-| `osname`       | `Android`             | OS 名称（资产画像）          |
-| `srcswversion` | `16`                  | OS/软件版本（资产画像）        |
-| `mastersrcmac` | `78:66:9d:a3:4f:51`   | 主源 MAC（设备归一线索）       |
-| `srcmac`       | `78:66:9d:a3:4f:51`   | 源 MAC（设备归一线索）        |
-| `srcserver`    | `0`                   | 设备角色提示（终端/非服务器）      |
+### 2.1.2 Ingest Pod Processing Pipeline (`edge/fortigate-ingest`)
 
+The responsibility of `edge/fortigate-ingest` is not “simple log forwarding,” but to convert FortiGate raw syslog text (`/data/fortigate-runtime/input/fortigate.log` and rotated files `fortigate.log-YYYYMMDD-HHMMSS[.gz]`) into a structured fact event stream (JSONL) that is auditable, replayable, and directly usable for aggregation analytics. The main loop processing order is fixed as **rotated first (historical backfill) → active next (near-real-time tailing)**: rotated files are sorted by filename timestamp and scanned sequentially to avoid missing historical logs after startup/restart; the active file is continuously tailed based on byte offset to balance real-time ingestion and recoverability. Outputs are written as hourly partitioned files `events-YYYYMMDD-HH.jsonl` (with separate DLQ/metrics JSONL files), facilitating unified downstream batch/stream consumption.
 
-### 2.1.2 Ingest Pod 处理链路（`edge/fortigate-ingest`）
+When processing a single log line, the pipeline first splits the **syslog header** and the **FortiGate `key=value` payload**, then performs field parsing and type normalization (numeric fields converted to `int`, missing fields retained as `null`), and generates a structured event including: normalized `event_ts` (prefer `date+time+tz`), preserved raw time-semantic fields (such as `eventtime`/`tz`), derived statistics (such as `bytes_total` / `pkts_total`), a normalized device key (`src_device_key`, for asset-level aggregation/anomaly correlation), and `kv_subset` for trace-back and schema extension. Successfully parsed events are written to `events-*.jsonl`; failed lines are written to DLQ (with `reason/raw/source`), ensuring that the conversion chain from “raw text → structured event” has fault tolerance and troubleshooting capability.
 
-`edge/fortigate-ingest` 的职责不是“简单转存日志”，而是将 FortiGate 原始 syslog 文本（`/data/fortigate-runtime/input/fortigate.log` 及轮转文件 `fortigate.log-YYYYMMDD-HHMMSS[.gz]`）转换为可审计、可回放、可直接做聚合分析的结构化事实事件流（JSONL）。主循环处理顺序固定为 **先 rotated（补历史）→ 再 active（准实时 tail）**：轮转文件通过文件名时间戳排序后依次扫描，避免启动/重启后漏补历史；active 文件则基于 byte offset 持续跟读，兼顾实时性与可恢复性。输出按小时切分写入 `events-YYYYMMDD-HH.jsonl`（另有 DLQ/metrics JSONL），便于下游批流统一消费。:contentReference[oaicite:0]{index=0} :contentReference[oaicite:1]{index=1}
+The key reliability design of this component is the **checkpoint + inode/offset + completed deduplication mechanism**. `checkpoint.json` stores three categories of state: `active` (the current active file `path/inode/offset/last_event_ts_seen`), `completed` (records of fully processed rotated files, using `path|inode|size|mtime` as a unique key to prevent duplicate historical backfill), and `counters` (cumulative counters such as `lines/bytes/events/dlq/parse_fail/write_fail/checkpoint_fail`). After a rotated file is completed, `mark_completed()` is called to persist the ledger entry; when tailing the active file, ingest resumes from the checkpoint `inode+offset`, and resets/re-scans offsets when detecting **inode change (rotation switch)** or **file truncation (`size < offset`)**, preventing out-of-range reads, duplicates, and misses. The checkpoint is persisted atomically via temporary file write + `fsync` + `os.replace`; each event is enriched with `ingest_ts` (UTC) and `source.path/inode/offset` (`offset=null` for `.gz` in most cases), enabling precise audit, replay localization, and idempotent reprocessing.
 
-处理单行日志时，pipeline 会先拆分 **syslog header** 与 **FortiGate key=value payload**，再执行字段解析与类型标准化（数值类字段转 `int`，缺失字段保留为 `null`），并生成结构化事件：包括标准化 `event_ts`（优先 `date+time+tz`）、保留原始时间语义字段（如 `eventtime`/`tz`）、派生统计字段（如 `bytes_total` / `pkts_total`）、设备归一化键（`src_device_key`，用于资产级聚合/异常关联），以及用于回溯与 schema 扩展的 `kv_subset`。成功解析的事件写入 `events-*.jsonl`，失败行进入 DLQ（附带 `reason/raw/source`），从而保证“原始文本 → 结构化事件”的转换链路具备容错与排障能力。:contentReference[oaicite:2]{index=2} :contentReference[oaicite:3]{index=3}
-
-该组件的关键可靠性设计在于 **checkpoint + inode/offset + completed 去重机制**。`checkpoint.json` 保存三类状态：`active`（当前 active 文件的 `path/inode/offset/last_event_ts_seen`）、`completed`（已完整处理的轮转文件记录，使用 `path|inode|size|mtime` 组成唯一 key，防止重复补历史）、`counters`（lines/bytes/events/dlq/parse_fail/write_fail/checkpoint_fail 等累计计数）。rotated 文件完成后调用 `mark_completed()` 落账；active 文件 tail 时使用 checkpoint 中的 `inode+offset` 从断点续读，并在检测到 **inode 变化（轮转切换）** 或 **文件截断（`size < offset`）** 时执行 offset 重置与重新扫描，避免越界/重复/漏读。checkpoint 通过临时文件写入 + `fsync` + `os.replace` 原子落盘，事件侧统一附加 `ingest_ts`（UTC）与 `source.path/inode/offset`（`.gz` 通常 `offset=null`），从而支持精确审计、回放定位与幂等重处理。:contentReference[oaicite:4]{index=4} :contentReference[oaicite:5]{index=5} :contentReference[oaicite:6]{index=6}
-
-
-### 2.1.3 Output Sample（parsed JSONL）字段清单（62 个顶层字段+3个source 子字段）
-**Output sample（parsed）**：证明 ingest 已把文本日志稳定转换为可分析 schema（时间标准化、派生字段、设备键、source审计元数据
+### 2.1.3 Output Sample (Parsed JSONL) Field List (62 top-level fields + 3 `source` subfields)
+**Output sample (parsed)**: demonstrates that ingest has stably converted text logs into an analyzable schema (time normalization, derived fields, device key, source audit metadata)
 
 ```text
 {"schema_version":1,"event_id":"d811b6b7c362dd6367f3736a19bc9ade","host":"_gateway","event_ts":"2026-01-15T16:49:21+01:00","type":"traffic","subtype":"forward","level":"notice","devname":"DAHUA_FORTIGATE","devid":"FG100ETK20014183","vd":"root","action":"deny","policyid":0,"policytype":"policy","sessionid":1066028432,"proto":17,"service":"udp/3702","srcip":"192.168.1.133","srcport":3702,"srcintf":"fortilink","srcintfrole":"lan","dstip":"192.168.2.108","dstport":3702,"dstintf":"LAN2","dstintfrole":"lan","sentbyte":0,"rcvdbyte":0,"sentpkt":0,"rcvdpkt":null,"bytes_total":0,"pkts_total":0,"parse_status":"ok","logid":"0000000013","eventtime":"1768492161732986577","tz":"+0100","logdesc":null,"user":null,"ui":null,"method":null,"status":null,"reason":null,"msg":null,"trandisp":"noop","app":null,"appcat":"unscanned","duration":0,"srcname":null,"srccountry":"Reserved","dstcountry":"Reserved","osname":null,"srcswversion":null,"srcmac":"b4:4c:3b:c1:29:c1","mastersrcmac":"b4:4c:3b:c1:29:c1","srcserver":0,"srchwvendor":"Dahua","devtype":"IP Camera","srcfamily":"IP Camera","srchwversion":"DHI-VTO4202FB-P","srchwmodel":null,"src_device_key":"b4:4c:3b:c1:29:c1","kv_subset":{"date":"2026-01-15","time":"16:49:21","tz":"+0100","eventtime":"1768492161732986577","logid":"0000000013","type":"traffic","subtype":"forward","level":"notice","vd":"root","action":"deny","policyid":"0","policytype":"policy","devname":"DAHUA_FORTIGATE","devid":"FG100ETK20014183","sessionid":"1066028432","proto":"17","service":"udp/3702","srcip":"192.168.1.133","srcport":"3702","srcintf":"fortilink","srcintfrole":"lan","dstip":"192.168.2.108","dstport":"3702","dstintf":"LAN2","dstintfrole":"lan","trandisp":"noop","duration":"0","sentbyte":"0","rcvdbyte":"0","sentpkt":"0","appcat":"unscanned","dstcountry":"Reserved","srccountry":"Reserved","srcmac":"b4:4c:3b:c1:29:c1","mastersrcmac":"b4:4c:3b:c1:29:c1","srcserver":"0","srchwvendor":"Dahua","devtype":"IP Camera","srcfamily":"IP Camera","srchwversion":"DHI-VTO4202FB-P"},"ingest_ts":"2026-02-16T19:59:59.808411+00:00","source":{"path":"/data/fortigate-runtime/input/fortigate.log-20260130-000004.gz","inode":6160578,"offset":null}}
 ```
-| 字段名              | 样本值                                            | 作用                         |
-| ---------------- | ---------------------------------------------- | -------------------------- |
-| `source.path`   | `/data/fortigate-runtime/input/fortigate.log-20260130-000004.gz` | 来源文件路径（轮转文件定位） |
-| `source.inode`  | `6160578`                                                        | 文件 inode（文件身份） |
-| `source.offset` | `null`                                                           | 偏移量（压缩文件常为空）   |
-| `schema_version` | `1`                                            | 输出 schema 版本               |
-| `event_id`       | `d811b6b7c362dd6367f3736a19bc9ade`             | 事件唯一 ID（去重/幂等）             |
-| `host`           | `_gateway`                                     | 保留 syslog host             |
-| `event_ts`       | `2026-01-15T16:49:21+01:00`                    | 标准化事件时间（下游窗口/排序主字段）        |
-| `type`           | `traffic`                                      | 日志主类                       |
-| `subtype`        | `forward`                                      | 日志子类（转发流量）                 |
-| `level`          | `notice`                                       | 事件等级                       |
-| `devname`        | `DAHUA_FORTIGATE`                              | 防火墙设备名                     |
-| `devid`          | `FG100ETK20014183`                             | 防火墙设备 ID                   |
-| `vd`             | `root`                                         | VDOM                       |
-| `action`         | `deny`                                         | 动作结果                       |
-| `policyid`       | `0`                                            | 策略 ID                      |
-| `policytype`     | `policy`                                       | 策略类型（普通转发策略）               |
-| `sessionid`      | `1066028432`                                   | 会话关联键                      |
-| `proto`          | `17`                                           | 协议号（UDP）                   |
-| `service`        | `udp/3702`                                     | 服务/端口标签                    |
-| `srcip`          | `192.168.1.133`                                | 源 IP                       |
-| `srcport`        | `3702`                                         | 源端口                        |
-| `srcintf`        | `fortilink`                                    | 源接口                        |
-| `srcintfrole`    | `lan`                                          | 源接口角色                      |
-| `dstip`          | `192.168.2.108`                                | 目的 IP                      |
-| `dstport`        | `3702`                                         | 目的端口                       |
-| `dstintf`        | `LAN2`                                         | 目的接口                       |
-| `dstintfrole`    | `lan`                                          | 目的接口角色                     |
-| `sentbyte`       | `0`                                            | 发送字节数                      |
-| `rcvdbyte`       | `0`                                            | 接收字节数                      |
-| `sentpkt`        | `0`                                            | 发送包数                       |
-| `rcvdpkt`        | `null`                                         | 接收包数（可空）                   |
-| `bytes_total`    | `0`                                            | 派生总字节数（便于聚合）               |
-| `pkts_total`     | `0`                                            | 派生总包数（便于聚合）                |
-| `parse_status`   | `ok`                                           | 解析状态                       |
-| `logid`          | `0000000013`                                   | FortiGate 日志 ID            |
-| `eventtime`      | `1768492161732986577`                          | 原生高精度事件时间                  |
-| `tz`             | `+0100`                                        | 时区                         |
-| `logdesc`        | `null`                                         | 原生日志描述（可空）                 |
-| `user`           | `null`                                         | 用户字段（可空）                   |
-| `ui`             | `null`                                         | UI/入口字段（可空）                |
-| `method`         | `null`                                         | 方法/动作字段（可空）                |
-| `status`         | `null`                                         | 状态字段（可空）                   |
-| `reason`         | `null`                                         | 原因字段（可空）                   |
-| `msg`            | `null`                                         | 文本消息字段（可空）                 |
-| `trandisp`       | `noop`                                         | 传输/处理状态信息                  |
-| `app`            | `null`                                         | 应用识别（可空）                   |
-| `appcat`         | `unscanned`                                    | 应用分类状态                     |
-| `duration`       | `0`                                            | 会话时长                       |
-| `srcname`        | `null`                                         | 源端名称（可空）                   |
-| `srccountry`     | `Reserved`                                     | 源国家/地址空间分类                 |
-| `dstcountry`     | `Reserved`                                     | 目的国家/地址空间分类                |
-| `osname`         | `null`                                         | OS 名称（可空）                  |
-| `srcswversion`   | `null`                                         | 软件/OS 版本（可空）               |
-| `srcmac`         | `b4:4c:3b:c1:29:c1`                            | 源 MAC                      |
-| `mastersrcmac`   | `b4:4c:3b:c1:29:c1`                            | 主源 MAC                     |
-| `srcserver`      | `0`                                            | 设备角色提示                     |
-| `srchwvendor`    | `Dahua`                                        | 硬件厂商（资产画像）                 |
-| `devtype`        | `IP Camera`                                    | 设备类型（资产画像）                 |
-| `srcfamily`      | `IP Camera`                                    | 设备家族（资产画像）                 |
-| `srchwversion`   | `DHI-VTO4202FB-P`                              | 硬件型号/版本（资产画像）              |
-| `srchwmodel`     | `null`                                         | 硬件型号字段（可空）                 |
-| `src_device_key` | `b4:4c:3b:c1:29:c1`                            | 归一化设备键（资产基线核心）             |
-| `kv_subset`      | `{...}`                                        | 原始 KV 子集快照（回溯/校验/schema扩展） |
-| `ingest_ts`      | `2026-02-16T19:59:59.808411+00:00`             | ingest 输出时间                |
-| `source`         | `{"path":"...","inode":6160578,"offset":null}` | 输入来源元数据（审计/回放定位）           |
 
+| Field Name       | Sample Value                                                     | Purpose                                                                |
+| ---------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `source.path`    | `/data/fortigate-runtime/input/fortigate.log-20260130-000004.gz` | Source file path (rotated file localization)                           |
+| `source.inode`   | `6160578`                                                        | File inode (file identity)                                             |
+| `source.offset`  | `null`                                                           | Offset (commonly null for compressed files)                            |
+| `schema_version` | `1`                                                              | Output schema version                                                  |
+| `event_id`       | `d811b6b7c362dd6367f3736a19bc9ade`                               | Unique event ID (deduplication / idempotency)                          |
+| `host`           | `_gateway`                                                       | Preserved syslog host                                                  |
+| `event_ts`       | `2026-01-15T16:49:21+01:00`                                      | Normalized event time (primary field for downstream windowing/sorting) |
+| `type`           | `traffic`                                                        | Log primary category                                                   |
+| `subtype`        | `forward`                                                        | Log subtype (forwarded traffic)                                        |
+| `level`          | `notice`                                                         | Event level                                                            |
+| `devname`        | `DAHUA_FORTIGATE`                                                | Firewall device name                                                   |
+| `devid`          | `FG100ETK20014183`                                               | Firewall device ID                                                     |
+| `vd`             | `root`                                                           | VDOM                                                                   |
+| `action`         | `deny`                                                           | Action result                                                          |
+| `policyid`       | `0`                                                              | Policy ID                                                              |
+| `policytype`     | `policy`                                                         | Policy type (regular forwarding policy)                                |
+| `sessionid`      | `1066028432`                                                     | Session correlation key                                                |
+| `proto`          | `17`                                                             | Protocol number (UDP)                                                  |
+| `service`        | `udp/3702`                                                       | Service / port label                                                   |
+| `srcip`          | `192.168.1.133`                                                  | Source IP                                                              |
+| `srcport`        | `3702`                                                           | Source port                                                            |
+| `srcintf`        | `fortilink`                                                      | Source interface                                                       |
+| `srcintfrole`    | `lan`                                                            | Source interface role                                                  |
+| `dstip`          | `192.168.2.108`                                                  | Destination IP                                                         |
+| `dstport`        | `3702`                                                           | Destination port                                                       |
+| `dstintf`        | `LAN2`                                                           | Destination interface                                                  |
+| `dstintfrole`    | `lan`                                                            | Destination interface role                                             |
+| `sentbyte`       | `0`                                                              | Sent bytes                                                             |
+| `rcvdbyte`       | `0`                                                              | Received bytes                                                         |
+| `sentpkt`        | `0`                                                              | Sent packets                                                           |
+| `rcvdpkt`        | `null`                                                           | Received packets (nullable)                                            |
+| `bytes_total`    | `0`                                                              | Derived total bytes (aggregation-friendly)                             |
+| `pkts_total`     | `0`                                                              | Derived total packets (aggregation-friendly)                           |
+| `parse_status`   | `ok`                                                             | Parsing status                                                         |
+| `logid`          | `0000000013`                                                     | FortiGate log ID                                                       |
+| `eventtime`      | `1768492161732986577`                                            | Native high-precision event time                                       |
+| `tz`             | `+0100`                                                          | Time zone                                                              |
+| `logdesc`        | `null`                                                           | Native log description (nullable)                                      |
+| `user`           | `null`                                                           | User field (nullable)                                                  |
+| `ui`             | `null`                                                           | UI/entry field (nullable)                                              |
+| `method`         | `null`                                                           | Method/action field (nullable)                                         |
+| `status`         | `null`                                                           | Status field (nullable)                                                |
+| `reason`         | `null`                                                           | Reason field (nullable)                                                |
+| `msg`            | `null`                                                           | Text message field (nullable)                                          |
+| `trandisp`       | `noop`                                                           | Transport/processing status information                                |
+| `app`            | `null`                                                           | Application identification (nullable)                                  |
+| `appcat`         | `unscanned`                                                      | Application category status                                            |
+| `duration`       | `0`                                                              | Session duration                                                       |
+| `srcname`        | `null`                                                           | Source endpoint name (nullable)                                        |
+| `srccountry`     | `Reserved`                                                       | Source country/address-space classification                            |
+| `dstcountry`     | `Reserved`                                                       | Destination country/address-space classification                       |
+| `osname`         | `null`                                                           | OS name (nullable)                                                     |
+| `srcswversion`   | `null`                                                           | Software/OS version (nullable)                                         |
+| `srcmac`         | `b4:4c:3b:c1:29:c1`                                              | Source MAC                                                             |
+| `mastersrcmac`   | `b4:4c:3b:c1:29:c1`                                              | Master source MAC                                                      |
+| `srcserver`      | `0`                                                              | Device role hint                                                       |
+| `srchwvendor`    | `Dahua`                                                          | Hardware vendor (asset profile)                                        |
+| `devtype`        | `IP Camera`                                                      | Device type (asset profile)                                            |
+| `srcfamily`      | `IP Camera`                                                      | Device family (asset profile)                                          |
+| `srchwversion`   | `DHI-VTO4202FB-P`                                                | Hardware model/version (asset profile)                                 |
+| `srchwmodel`     | `null`                                                           | Hardware model field (nullable)                                        |
+| `src_device_key` | `b4:4c:3b:c1:29:c1`                                              | Normalized device key (core asset-baseline key)                        |
+| `kv_subset`      | `{...}`                                                          | Raw KV subset snapshot (trace-back / validation / schema extension)    |
+| `ingest_ts`      | `2026-02-16T19:59:59.808411+00:00`                               | Ingest output timestamp                                                |
+| `source`         | `{"path":"...","inode":6160578,"offset":null}`                   | Input source metadata (audit / replay localization)                    |
 
+## 3. Core Components (Planned Scope and Current Implementation Boundary)
 
+The core side (`netops-node1 / r450`) is positioned as the **Data Plane + Core Analytics** hosting node. It is responsible for receiving the structured fact event stream produced by the edge-side `edge/fortigate-ingest`, and for completing event decoupling, basic aggregation, correlation analysis, alert cluster generation, and the execution entry for subsequent intelligent augmented inference (LLM/Agent). The current architectural objective is to first establish a **stable, observable, and extensible** minimal closed loop: `ingest output -> broker/queue -> consumer/correlator -> alert context -> (optional) LLM inference queue`.
 
+### 3.1 Core-Side Objectives at the Current Stage (README-ready)
+- **Data plane ingress**: receive the fact event stream output from `r230` and establish a stable transport/consumption entry point (decoupling edge production from core consumption).
+- **Minimal streaming consumption pipeline**: implement a basic consumer/correlator for window aggregation, rule triggering, and alert context construction.
+- **Reserved intelligent augmentation entry**: retain an `LLM inference queue` and rate-limiting mechanism on the core side for future alert-level inference (explanation / root-cause assistance / Runbook draft generation), without blocking the main pipeline.
+- **Clear layering boundary**: real-time detection and basic correlation are handled by deterministic streaming modules; LLM/Agent only processes high-value alert clusters and does not participate in per-event full-stream classification.
 
+### 3.2 Evaluated but Not Adopted at This Stage (Flink Direction)
+A **ByteDance-related Flink solution** was evaluated during the early stage of the project (validation already performed). However, under the current environment constraints (`k3s`, single core node `r450`, limited memory, no GPU, and priority on fast closed-loop delivery with low operational overhead), the conclusion is: **it is not suitable as the main core-side path at this stage**. The primary reason is its relatively high runtime resource requirements, component orchestration complexity, and operational cost, which do not match the current objective of “first establishing the data plane and the minimal analytics closed loop.” Flink-class frameworks may be re-evaluated later if event scale, stateful computation complexity, and throughput requirements increase significantly.
 
+### 3.3 Core Technology Stack and Deployment Plan (Current Mainline)
+The core side (`netops-node1 / r450`) adopts **Kafka (KRaft, single-node) + Python Consumer/Correlator + (optional) LLM inference service**, running on `k3s`. The current objective is to prioritize the `r230 -> r450` data plane and the minimal correlation-analysis closed loop, while keeping deployment complexity controllable, the pipeline observable, and the future expansion path clear under constrained resources.
+
+**Technology Stack (Current Stage)**
+- **Core Broker**: `Apache Kafka (KRaft mode, single-node)` (event ingress, producer-consumer decoupling, Topic/Consumer Group extensibility)
+- **Core Consumer / Correlator**: `Python 3.11 + Kafka Client + window aggregation / rule-correlation modules` (event consumption, aggregation, anomaly cluster construction, alert context generation)
+- **Inference Entry (TBD)**: `Inference Queue + resident inference service (rate-limited)` (only for explanation / root-cause assistance / Runbook draft generation on high-value alert clusters)
+
+## X.0 Potential Required Resources and Support
+This section describes the resources and support required to advance the project from the current stage (`r230 -> r450` data plane and core analytics capability construction) to **core streaming analytics + alert-level LLM-augmented inference (CPU/GPU)**. Resource request priorities are focused on **memory expansion** and **GPU (core-side AI inference acceleration)**, if such support can be obtained.
+
+### X.1 Current Hardware Baseline (Already Available)
+
+- **netops-node2 / r230 (Edge Side)**
+  - CPU: `Intel Xeon E3-1220 v5` (4C/4T)
+  - Memory: `~8 GB`
+  - Role: `Edge Ingestion` (with `edge/fortigate-ingest` already deployed and running)
+  - Disk: `1TB SSD` (sufficient for current ingest input/output and replay file storage)
+
+- **netops-node1 / r450 (Core Side)**
+  - CPU: `Intel Xeon Silver 4310` (12C/24T)
+  - Memory: `~16 GB` (`HMA82GR7DJR8N-XN | DDR4 ECC RDIMM`)
+  - GPU: None (only Matrox management display controller, not for AI inference)
+  - Role: `Core Data Plane / Core Analytics` (future host for broker, correlator, and alert-level LLM-augmented inference)
+  - Disk: `2TB SSD` (sufficient for broker data, event cache, and analytics artifact storage)
+
+> The current primary bottlenecks on the core side are not CPU, but **insufficient memory capacity (~16GB)** and the **absence of an inference-capable GPU**.
+
+### X.2 P0 (Highest Priority) Resource Request: Core-Side Memory Expansion + GPU
+
+For `r450` (`netops-node1`) to host `broker + correlator + queue + resident LLM service (rate-limited queue mode)`, the P0 resource request priority is **memory expansion + inference GPU**. The current core-side memory (~16GB) is insufficient to stably support concurrent operation of the core data plane and alert-level LLM-augmented inference. The requested memory expansion is **3×16GB (48GB)** of matching specification.
+
+For GPU resources, the target is **1 GPU suitable for local inference (or a server with such a GPU)** to support a single resident model + rate-limited queue. Suggested examples include **NVIDIA A2 16GB** or **NVIDIA L4 24GB** (or equivalent). Any future upgrade to higher VRAM or multi-GPU should be decided based on actual Agent concurrency and inference load validation results.
+
+### X.3 P1 Resource Request: Edge-Side `r230` Memory Expansion (Stability)
+
+`r230` (`netops-node2`) currently has ~8GB memory, which is sufficient for the current `fortigate-ingest`; however, if additional device log sources, increased historical backfill volume, and pre-forwarding components are introduced later, memory expansion is recommended to improve edge-side stability and buffering headroom. The memory specification for this node should be **DDR4 ECC UDIMM (compatible with R230 / Xeon E3-1220 v5)**, with a recommended configuration of **2×16GB (32GB)** and at least **2×8GB (16GB)**.
+
+> [!IMPORTANT]
+> Its memory specification is not compatible with the **DDR4 ECC RDIMM** used by `r450` and cannot be mixed.
+
+### X.4 P1 Resource Request: R&D and Training Support (AI / Agent / AIOps)
+
+In addition to hardware, school-side R&D / faculty support is recommended to support implementation of the `Core Analytics + Multiple Agent + LLM` stage, including: **local LLM inference and deployment (CPU/GPU, quantized models, rate-limited queues)**, **LLM application engineering (Prompting, structured output, Tool Calling, RAG)**, **Multiple Agent orchestration and boundary design (responsibility split, fallback handling, observability)**, and **AIOps analytics methods and evaluation (evidence chains, alert consolidation, Runbook quality evaluation)**. Stage-based access to campus GPU servers or private model platforms is also recommended.
