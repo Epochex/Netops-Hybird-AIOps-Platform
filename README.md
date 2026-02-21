@@ -1,17 +1,43 @@
-# Towards NetOps: Hybrid AIOps-Driven Distributed Deep Root-Cause Tracing and Intelligent Automated Remediation System
-Hybrid AIOps Platform: Deterministic Streaming Core + CPU Local LLM (On-Demand) + Multi-Agent Orchestration
+> [!TIP]
+> **Hybrid AIOps Platform: Deterministic Streaming Core + CPU Local LLM (On-Demand) + Multi-Agent Orchestration**
 
-This project aims to build a **distributed AIOps platform (Towards NetOps)** for complex network operations scenarios, following the main pipeline of **Edge Fact Ingestion → Core Streaming Analytics → LLM-Augmented Reasoning → Remediation Loop**, and progressively delivering an engineering capability evolution from anomaly detection, evidence-chain attribution, to remediation recommendation and execution control. The platform does not target “real-time LLM inference on all logs”; instead, it is built on a stable data plane and explainable evidence flow, and performs on-demand intelligent enhancement analysis on high-value anomaly clusters at the core side, so as to achieve a practical balance among cost, real-time performance, and operability.
+#### Project Overview
 
-The system adopts a layered architecture of **Edge Ingestion + Core Analytics**. The edge side is responsible for near-source log collection, structured fact eventization, audit trace retention, and replayable persistence, converting raw device logs into a sustainably consumable fact event stream; the core side is responsible for streaming data plane hosting, event aggregation and correlation analysis, evidence-chain construction, and, on top of that, introducing an **LLM-augmented analysis layer** for alert explanation, situation summarization, attribution assistance, and Runbook draft generation. This augmentation layer runs in **resident service + rate-limited queue** mode: rule/streaming modules perform real-time detection and high-value anomaly filtering, while the LLM only performs low-concurrency, on-demand inference on alert-level context, avoiding resource contention and latency impact on the main path.
+This project aims to build a **distributed AIOps platform (Towards NetOps)** for complex network operations scenarios, following the main line of **Edge Fact Ingestion → Core Streaming Analytics → LLM-Augmented Reasoning → Remediation Loop**, and progressively implementing an engineering capability evolution from anomaly detection and evidence-chain attribution to remediation recommendation and execution control. The platform does not target “real-time LLM inference on full-volume logs”; instead, it is built on a stable data plane and explainable evidence flow, and performs on-demand intelligent augmented analysis for high-value anomaly clusters on the core side, in order to achieve a deployable balance among cost, real-time performance, and operability.
 
-Under current resource constraints (no GPU on the core side, CPU-only inference), the technical route of this project is explicitly **“deterministic streaming analysis as the primary path + on-demand LLM augmentation”**: real-time detection, base aggregation, and correlation computation are handled by rule/stream processing modules; the LLM is responsible for explanation and plan generation on compressed, high-value evidence contexts. This design allows the platform to gradually evolve toward Multiple Agent + LLM collaborative analysis and automated remediation loop capabilities without relying on local training or continuously costly API calls.
+#### Architecture Paradigm
 
-The planned construction sequence of the project is as follows:  
-**Phase 1** completes the engineering implementation of the edge fact ingestion layer (FortiGate logs and potentially additional network device logs), ensuring auditable, recoverable, and replayable inputs;  
-**Phase 2** establishes the data plane and minimal streaming consumption pipeline on the core side, completing event transmission decoupling and basic aggregation analytics;  
-**Phase 3** progressively introduces Multiple Agent + LLM for correlation analysis, network situational awareness, evidence-chain attribution, and automated self-healing Runbook generation based on AIOps principles;  
-**Phase 4** extends to remediation recommendations, human-approved execution, and low-intrusion automated self-healing under explainable and verifiable constraints.
+The system adopts a layered architecture of **Edge Ingestion + Core Analytics**. The edge side is responsible for near-source log collection, structured fact eventization, audit trail retention, and replayable persistence, converting raw device logs into a sustainably consumable fact event stream; the core side is responsible for streaming data plane hosting, event aggregation and correlation analysis, and evidence-chain construction, and on this basis introduces an **LLM-augmented analytics layer** for alert explanation, situation summarization, attribution assistance, and Runbook draft generation. This augmentation layer adopts a **resident service + rate-limited queue** operating mode: rule-based/streaming modules perform real-time detection and high-value anomaly filtering, while the LLM performs low-concurrency, on-demand inference only on alert-level context, avoiding contention with the real-time performance and system resources of the main path.
+
+> [!IMPORTANT]
+> The platform target is not “real-time LLM inference on full-volume logs,” but on-demand intelligent augmented analysis of high-value anomaly clusters based on a stable data plane and explainable evidence flow.
+
+- Current Technical Route Under Resource Constraints
+
+Under current resource constraints (no GPU on the core side, CPU-only inference), the technical route of this project is explicitly **“deterministic streaming analytics as the primary path + on-demand LLM augmentation”**: real-time detection, basic aggregation, and correlation computation are handled by rule-based/stream processing modules; the LLM is responsible for explanation and planning generation over compressed high-value evidence context. This design enables the platform, without relying on local training or continuous high-cost API calls, to still progressively evolve toward Multiple Agent + LLM collaborative analysis and automated remediation closed-loop capability.
+
+> [!NOTE]
+> At the current stage, the priorities are: stable data plane, explainable evidence flow, and runnable core pipeline; the LLM is connected on demand as an alert-level augmentation module.
+
+The project construction sequence is expected to proceed in the following stages:
+
+1. **Phase 1: Engineering implementation of the edge fact ingestion layer**  
+   Complete ingestion of FortiGate logs (and potentially additional network device logs in the future), ensuring the input is auditable, recoverable, and replayable.
+
+2. **Phase 2: Core-side data plane and minimal streaming consumption pipeline**  
+   Establish the data plane on the core side, and complete event transport decoupling and basic aggregation analytics.
+
+3. **Phase 3: Introduction of AIOps augmented analytics capabilities**  
+   Based on AIOps principles, progressively introduce Multiple Agent + LLM capabilities for correlation analysis, network situational awareness, evidence-chain attribution, and automated self-healing Runbook generation.
+
+4. **Phase 4: Remediation loop extension**  
+   Under explainability and verifiability constraints, extend to remediation recommendations, human approval execution, and low-perception automated self-healing.
+
+## Design Boundary
+
+> [!WARNING]
+> At the current stage, this project does not take “per-event LLM judgment over the full event stream” as an architectural target.  
+> The main path is handled by deterministic streaming modules for real-time detection and basic correlation; LLM/Agent components are used for on-demand augmented analysis of high-value alert clusters and remediation recommendation generation.
 
 ## 1.1 Project Positioning and Current Architecture Boundary
 The current project architecture is centered around **r230 (edge collection) → r450 (core data plane and analytics processing)**, i.e., near-source collection and factization on the edge side, and subsequent streaming processing, correlation analysis, evidence-chain attribution, and automated remediation capability implementation on the core side. This means the project has completed the most critical input-plane landing work in platform construction and has entered the architecture advancement stage oriented toward core capability expansion.
