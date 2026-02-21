@@ -32,18 +32,278 @@
 ====================================================================================================
 FILE: README.md
 ====================================================================================================
-# Netops-causality-remediation
+# Towards NetOps： AIOps Driven 分布式深度根因追踪与智能处置系统
+> edge/fortigate-ingest
 
-Monorepo:
-- edge/: R230 (ingest/parse)
-- core/: R450 (storage/analytics/observability)
+> [!IMPORTANT]
+> 该项目旨在构建一个分布式架构的，面向复杂网络运维场景的分布式 AIOps 引擎，通过边缘事实日志沉淀与核心流式关联推理，实现异常因果追踪与证据驱动运维决策支持
 
-Runtime data is NOT in Git.
+---
+
+
+## 1) 原始日志（`/data/fortigate-runtime/input/fortigate.log`）格式分析
+
+## FortiGate Log Input / Ingest / Parsed Output Specification
+
+> [!IMPORTANT]
+> 本节定义 FortiGate 日志输入格式、结构化事件输出格式（JSONL）、字段语义及 ingest 处理链路，用于数据接入、分析开发、排障审计与后续流式处理对接。
+
+---
+
+## 2. Raw FortiGate Log Format (Input)
+
+### 2.1 Input Files
+
+- **Active log**
+  - `/data/fortigate-runtime/input/fortigate.log`
+- **Rotated logs**
+  - `/data/fortigate-runtime/input/fortigate.log-YYYYMMDD-HHMMSS`
+  - `/data/fortigate-runtime/input/fortigate.log-YYYYMMDD-HHMMSS.gz`
+
+### 2.2 Line Format
+
+每行日志由两部分组成：
+
+1. **Syslog header**
+2. **FortiGate key-value payload**
+
+**Example (real sample):**
+```text
+Feb 21 15:45:27 _gateway date=2026-02-21 time=15:45:26 devname="DAHUA_FORTIGATE" devid="FG100ETK20014183" logid="0001000014" type="traffic" subtype="local" level="notice" vd="root" eventtime=1771685127249713472 tz="+0100" srcip=192.168.16.41 srcname="es-73847E56DA65" srcport=48689 srcintf="LACP" srcintfrole="lan" dstip=255.255.255.255 dstport=48689 dstintf="unknown0" dstintfrole="undefined" sessionid=1211202700 proto=17 action="deny" policyid=0 policytype="local-in-policy" service="udp/48689" dstcountry="Reserved" srccountry="Reserved" trandisp="noop" app="udp/48689" duration=0 sentbyte=0 rcvdbyte=0 sentpkt=0 appcat="unscanned" srchwvendor="Samsung" devtype="Phone" srcfamily="Galaxy" osname="Android" srcswversion="16" mastersrcmac="78:66:9d:a3:4f:51" srcmac="78:66:9d:a3:4f:51" srcserver=0
+```
+
+Input 字段分析（
+| Field / Pattern                                  | Example Value                                   | Notes / Meaning             |
+| ------------------------------------------------ | ----------------------------------------------- | --------------------------- |
+| syslog header                                    | `Feb 21 15:45:27 _gateway`                      | syslog 时间 + 主机名（原始接入头）      |
+| `date` / `time` / `tz`                           | `2026-02-21` / `15:45:26` / `+0100`             | FortiGate 事件时间组成字段（用于标准化时间） |
+| `eventtime`                                      | `1771685127249713472`                           | FortiGate 内部高精度时间戳（排序/精细时序） |
+| `devname` / `devid` / `vd`                       | `DAHUA_FORTIGATE` / `FG100ETK20014183` / `root` | 防火墙设备身份与 VDOM               |
+| `logid` / `type` / `subtype` / `level`           | `0001000014` / `traffic` / `local` / `notice`   | 事件分类：本机面 traffic 日志         |
+| `policyid` / `policytype` / `action`             | `0` / `local-in-policy` / `deny`                | 命中本机面策略并被拒绝                 |
+| `sessionid`                                      | `1211202700`                                    | 会话关联键                       |
+| `proto` / `service` / `app`                      | `17` / `udp/48689` / `udp/48689`                | UDP 广播类业务（端口级）              |
+| `srcip` / `srcport`                              | `192.168.16.41` / `48689`                       | 源端（LAN 终端）                  |
+| `srcintf` / `srcintfrole`                        | `LACP` / `lan`                                  | 源接口与角色（LAN 侧）               |
+| `dstip` / `dstport`                              | `255.255.255.255` / `48689`                     | 目标为广播地址（LAN broadcast）      |
+| `dstintf` / `dstintfrole`                        | `unknown0` / `undefined`                        | 本机面/特殊目标语义线索（非普通转发出口）       |
+| `duration` / `sentbyte` / `rcvdbyte` / `sentpkt` | `0 / 0 / 0 / 0`                                 | 快速拒绝或未形成有效通信                |
+| `srccountry` / `dstcountry`                      | `Reserved / Reserved`                           | 保留地址空间（内网/非公网）              |
+| `srcname`                                        | `es-73847E56DA65`                               | 终端名称/标识                     |
+| `srchwvendor` / `devtype` / `srcfamily`          | `Samsung / Phone / Galaxy`                      | 设备画像（厂商/类型/家族）              |
+| `osname` / `srcswversion`                        | `Android / 16`                                  | 终端 OS 与版本                   |
+| `srcmac` / `mastersrcmac`                        | `78:66:9d:a3:4f:51 / 78:66:9d:a3:4f:51`         | 设备唯一性特征（设备归一化关键候选）          |
+| `srcserver`                                      | `0`                                             | 设备角色提示字段（终端侧）               |
+
+
+Ingest Pod 处理思路（edge/fortigate-ingest）
+
+输入源：/data/fortigate-runtime/input/fortigate.log + 轮转文件（含 .gz）
+
+处理顺序：先处理 rotated（补历史）→ 再 tail active（准实时）
+
+处理动作：
+
+按行读取 syslog 文本
+
+拆分 syslog header 与 FortiGate key=value payload
+
+做字段解析与类型标准化（int/string/null）
+
+生成结构化事件（补充 event_ts、派生统计字段、设备键等）
+
+输出 events-*.jsonl
+
+附加 ingest_ts 与 source(path/inode/offset) 用于审计/回放定位
+
+目的：把原始文本日志变成可回放、可审计、可直接聚合分析的事实事件流（JSONL）
+
+
+Output Sample
+
+```text
+{"schema_version":1,"event_id":"d811b6b7c362dd6367f3736a19bc9ade","host":"_gateway","event_ts":"2026-01-15T16:49:21+01:00","type":"traffic","subtype":"forward","level":"notice","devname":"DAHUA_FORTIGATE","devid":"FG100ETK20014183","vd":"root","action":"deny","policyid":0,"policytype":"policy","sessionid":1066028432,"proto":17,"service":"udp/3702","srcip":"192.168.1.133","srcport":3702,"srcintf":"fortilink","srcintfrole":"lan","dstip":"192.168.2.108","dstport":3702,"dstintf":"LAN2","dstintfrole":"lan","sentbyte":0,"rcvdbyte":0,"sentpkt":0,"rcvdpkt":null,"bytes_total":0,"pkts_total":0,"parse_status":"ok","logid":"0000000013","eventtime":"1768492161732986577","tz":"+0100","logdesc":null,"user":null,"ui":null,"method":null,"status":null,"reason":null,"msg":null,"trandisp":"noop","app":null,"appcat":"unscanned","duration":0,"srcname":null,"srccountry":"Reserved","dstcountry":"Reserved","osname":null,"srcswversion":null,"srcmac":"b4:4c:3b:c1:29:c1","mastersrcmac":"b4:4c:3b:c1:29:c1","srcserver":0,"srchwvendor":"Dahua","devtype":"IP Camera","srcfamily":"IP Camera","srchwversion":"DHI-VTO4202FB-P","srchwmodel":null,"src_device_key":"b4:4c:3b:c1:29:c1","kv_subset":{"date":"2026-01-15","time":"16:49:21","tz":"+0100","eventtime":"1768492161732986577","logid":"0000000013","type":"traffic","subtype":"forward","level":"notice","vd":"root","action":"deny","policyid":"0","policytype":"policy","devname":"DAHUA_FORTIGATE","devid":"FG100ETK20014183","sessionid":"1066028432","proto":"17","service":"udp/3702","srcip":"192.168.1.133","srcport":"3702","srcintf":"fortilink","srcintfrole":"lan","dstip":"192.168.2.108","dstport":"3702","dstintf":"LAN2","dstintfrole":"lan","trandisp":"noop","duration":"0","sentbyte":"0","rcvdbyte":"0","sentpkt":"0","appcat":"unscanned","dstcountry":"Reserved","srccountry":"Reserved","srcmac":"b4:4c:3b:c1:29:c1","mastersrcmac":"b4:4c:3b:c1:29:c1","srcserver":"0","srchwvendor":"Dahua","devtype":"IP Camera","srcfamily":"IP Camera","srchwversion":"DHI-VTO4202FB-P"},"ingest_ts":"2026-02-16T19:59:59.808411+00:00","source":{"path":"/data/fortigate-runtime/input/fortigate.log-20260130-000004.gz","inode":6160578,"offset":null}}
+```
+
+output Analysis
+| Field / Group                                                           | Example Value                                            | Notes / Meaning                            |
+| ----------------------------------------------------------------------- | -------------------------------------------------------- | ------------------------------------------ |
+| `schema_version` / `parse_status`                                       | `1` / `ok`                                               | 输出 schema 版本与解析结果状态                        |
+| `event_id`                                                              | `d811b6b7...`                                            | 结构化事件唯一 ID（去重/幂等写入）                        |
+| `host`                                                                  | `_gateway`                                               | 保留 syslog host                             |
+| `event_ts`                                                              | `2026-01-15T16:49:21+01:00`                              | 标准化后的事件时间（下游窗口/排序直接使用）                     |
+| `eventtime` / `tz`                                                      | `1768492161732986577` / `+0100`                          | 保留 FortiGate 原生时间语义                        |
+| `ingest_ts`                                                             | `2026-02-16T19:59:59.808411+00:00`                       | edge 输出时间（延迟/排障分析）                         |
+| `devname` / `devid` / `vd` / `logid`                                    | `DAHUA_FORTIGATE / FG100... / root / 0000000013`         | 防火墙设备身份与日志分类基础字段                           |
+| `type` / `subtype` / `level`                                            | `traffic / forward / notice`                             | 该样本是转发流量（非 local）                          |
+| `policyid` / `policytype` / `action`                                    | `0 / policy / deny`                                      | 命中普通转发策略并拒绝                                |
+| `sessionid` / `proto` / `service`                                       | `1066028432 / 17 / udp/3702`                             | 会话键 + UDP/3702 服务分类                        |
+| `srcip:srcport` / `dstip:dstport`                                       | `192.168.1.133:3702 -> 192.168.2.108:3702`               | 内网跨网段/跨接口拒绝流量分析核心                          |
+| `srcintf(srcrole)` / `dstintf(dstrole)`                                 | `fortilink(lan) -> LAN2(lan)`                            | 拓扑路径与接口维度分析                                |
+| `sentbyte/rcvdbyte/sentpkt/rcvdpkt`                                     | `0/0/0/null`                                             | 原始计数字段（可为空）                                |
+| `bytes_total` / `pkts_total`                                            | `0 / 0`                                                  | 派生总量字段，便于下游聚合                              |
+| `trandisp` / `app` / `appcat` / `duration`                              | `noop / null / unscanned / 0`                            | 转发处理信息、应用识别、会话持续时间                         |
+| `srccountry` / `dstcountry`                                             | `Reserved / Reserved`                                    | 地址空间/地理分类（内网保留）                            |
+| `srcmac` / `mastersrcmac` / `srcserver`                                 | `b4:4c:... / b4:4c:... / 0`                              | 设备识别与角色线索                                  |
+| `srchwvendor` / `devtype` / `srcfamily` / `srchwversion` / `srchwmodel` | `Dahua / IP Camera / IP Camera / DHI-VTO4202FB-P / null` | 资产画像（厂商/类型/型号）                             |
+| `src_device_key`                                                        | `b4:4c:3b:c1:29:c1`                                      | 归一化设备键（资产基线/异常检测核心）                        |
+| `kv_subset`                                                             | `{...}`                                                  | 保留原始 KV 子集，用于回溯/校验/schema 扩展               |
+| `source.path` / `source.inode` / `source.offset`                        | `/data/...gz / 6160578 / null`                           | 输入来源定位（轮转文件审计、回放定位）；`.gz` 常见 `offset=null` |
 
 ====================================================================================================
 FILE: code_snapshot.txt
 ====================================================================================================
+# Netops-causality-remediation code snapshot
+# Root: /data/Netops-causality-remediation
+# Files: 12
 
+## TREE (filtered)
+  README.md
+  code_snapshot.txt
+  export.py
+  docs/
+  core/
+    deployments/
+    tests/
+    docs/
+  edge/
+    fortigate-ingest/
+      Dockerfile.stageb
+      ingest_pod.yaml
+      tests/
+      docs/
+        contract_fgt_v1.md
+      configs/
+      bin/
+        checkpoint.py
+        main.py
+        metrics.py
+        parser_fgt_v1.py
+        sink_jsonl.py
+        source_file.py
+      scripts/
+
+
+====================================================================================================
+FILE: README.md
+====================================================================================================
+# Towards NetOps： AIOps Driven 分布式深度根因追踪与智能处置系统
+> edge/fortigate-ingest
+
+> [!IMPORTANT]
+> 该项目旨在构建一个分布式架构的，面向复杂网络运维场景的分布式 AIOps 引擎，通过边缘事实日志沉淀与核心流式关联推理，实现异常因果追踪与证据驱动运维决策支持
+
+---
+
+
+## 1) 原始日志（`/data/fortigate-runtime/input/fortigate.log`）格式分析
+
+## FortiGate Log Input / Ingest / Parsed Output Specification
+
+> [!IMPORTANT]
+> 本节定义 FortiGate 日志输入格式、结构化事件输出格式（JSONL）、字段语义及 ingest 处理链路，用于数据接入、分析开发、排障审计与后续流式处理对接。
+
+---
+
+## 2. Raw FortiGate Log Format (Input)
+
+### 2.1 Input Files
+
+- **Active log**
+  - `/data/fortigate-runtime/input/fortigate.log`
+- **Rotated logs**
+  - `/data/fortigate-runtime/input/fortigate.log-YYYYMMDD-HHMMSS`
+  - `/data/fortigate-runtime/input/fortigate.log-YYYYMMDD-HHMMSS.gz`
+
+### 2.2 Line Format
+
+每行日志由两部分组成：
+
+1. **Syslog header**
+2. **FortiGate key-value payload**
+
+**Example (real sample):**
+```text
+Feb 21 15:45:27 _gateway date=2026-02-21 time=15:45:26 devname="DAHUA_FORTIGATE" devid="FG100ETK20014183" logid="0001000014" type="traffic" subtype="local" level="notice" vd="root" eventtime=1771685127249713472 tz="+0100" srcip=192.168.16.41 srcname="es-73847E56DA65" srcport=48689 srcintf="LACP" srcintfrole="lan" dstip=255.255.255.255 dstport=48689 dstintf="unknown0" dstintfrole="undefined" sessionid=1211202700 proto=17 action="deny" policyid=0 policytype="local-in-policy" service="udp/48689" dstcountry="Reserved" srccountry="Reserved" trandisp="noop" app="udp/48689" duration=0 sentbyte=0 rcvdbyte=0 sentpkt=0 appcat="unscanned" srchwvendor="Samsung" devtype="Phone" srcfamily="Galaxy" osname="Android" srcswversion="16" mastersrcmac="78:66:9d:a3:4f:51" srcmac="78:66:9d:a3:4f:51" srcserver=0
+```
+
+Input 字段分析（
+| Field / Pattern                                  | Example Value                                   | Notes / Meaning             |
+| ------------------------------------------------ | ----------------------------------------------- | --------------------------- |
+| syslog header                                    | `Feb 21 15:45:27 _gateway`                      | syslog 时间 + 主机名（原始接入头）      |
+| `date` / `time` / `tz`                           | `2026-02-21` / `15:45:26` / `+0100`             | FortiGate 事件时间组成字段（用于标准化时间） |
+| `eventtime`                                      | `1771685127249713472`                           | FortiGate 内部高精度时间戳（排序/精细时序） |
+| `devname` / `devid` / `vd`                       | `DAHUA_FORTIGATE` / `FG100ETK20014183` / `root` | 防火墙设备身份与 VDOM               |
+| `logid` / `type` / `subtype` / `level`           | `0001000014` / `traffic` / `local` / `notice`   | 事件分类：本机面 traffic 日志         |
+| `policyid` / `policytype` / `action`             | `0` / `local-in-policy` / `deny`                | 命中本机面策略并被拒绝                 |
+| `sessionid`                                      | `1211202700`                                    | 会话关联键                       |
+| `proto` / `service` / `app`                      | `17` / `udp/48689` / `udp/48689`                | UDP 广播类业务（端口级）              |
+| `srcip` / `srcport`                              | `192.168.16.41` / `48689`                       | 源端（LAN 终端）                  |
+| `srcintf` / `srcintfrole`                        | `LACP` / `lan`                                  | 源接口与角色（LAN 侧）               |
+| `dstip` / `dstport`                              | `255.255.255.255` / `48689`                     | 目标为广播地址（LAN broadcast）      |
+| `dstintf` / `dstintfrole`                        | `unknown0` / `undefined`                        | 本机面/特殊目标语义线索（非普通转发出口）       |
+| `duration` / `sentbyte` / `rcvdbyte` / `sentpkt` | `0 / 0 / 0 / 0`                                 | 快速拒绝或未形成有效通信                |
+| `srccountry` / `dstcountry`                      | `Reserved / Reserved`                           | 保留地址空间（内网/非公网）              |
+| `srcname`                                        | `es-73847E56DA65`                               | 终端名称/标识                     |
+| `srchwvendor` / `devtype` / `srcfamily`          | `Samsung / Phone / Galaxy`                      | 设备画像（厂商/类型/家族）              |
+| `osname` / `srcswversion`                        | `Android / 16`                                  | 终端 OS 与版本                   |
+| `srcmac` / `mastersrcmac`                        | `78:66:9d:a3:4f:51 / 78:66:9d:a3:4f:51`         | 设备唯一性特征（设备归一化关键候选）          |
+| `srcserver`                                      | `0`                                             | 设备角色提示字段（终端侧）               |
+
+
+Ingest Pod 处理思路（edge/fortigate-ingest）
+
+输入源：/data/fortigate-runtime/input/fortigate.log + 轮转文件（含 .gz）
+
+处理顺序：先处理 rotated（补历史）→ 再 tail active（准实时）
+
+处理动作：
+
+按行读取 syslog 文本
+
+拆分 syslog header 与 FortiGate key=value payload
+
+做字段解析与类型标准化（int/string/null）
+
+生成结构化事件（补充 event_ts、派生统计字段、设备键等）
+
+输出 events-*.jsonl
+
+附加 ingest_ts 与 source(path/inode/offset) 用于审计/回放定位
+
+目的：把原始文本日志变成可回放、可审计、可直接聚合分析的事实事件流（JSONL）
+
+
+Output Sample
+
+```text
+{"schema_version":1,"event_id":"d811b6b7c362dd6367f3736a19bc9ade","host":"_gateway","event_ts":"2026-01-15T16:49:21+01:00","type":"traffic","subtype":"forward","level":"notice","devname":"DAHUA_FORTIGATE","devid":"FG100ETK20014183","vd":"root","action":"deny","policyid":0,"policytype":"policy","sessionid":1066028432,"proto":17,"service":"udp/3702","srcip":"192.168.1.133","srcport":3702,"srcintf":"fortilink","srcintfrole":"lan","dstip":"192.168.2.108","dstport":3702,"dstintf":"LAN2","dstintfrole":"lan","sentbyte":0,"rcvdbyte":0,"sentpkt":0,"rcvdpkt":null,"bytes_total":0,"pkts_total":0,"parse_status":"ok","logid":"0000000013","eventtime":"1768492161732986577","tz":"+0100","logdesc":null,"user":null,"ui":null,"method":null,"status":null,"reason":null,"msg":null,"trandisp":"noop","app":null,"appcat":"unscanned","duration":0,"srcname":null,"srccountry":"Reserved","dstcountry":"Reserved","osname":null,"srcswversion":null,"srcmac":"b4:4c:3b:c1:29:c1","mastersrcmac":"b4:4c:3b:c1:29:c1","srcserver":0,"srchwvendor":"Dahua","devtype":"IP Camera","srcfamily":"IP Camera","srchwversion":"DHI-VTO4202FB-P","srchwmodel":null,"src_device_key":"b4:4c:3b:c1:29:c1","kv_subset":{"date":"2026-01-15","time":"16:49:21","tz":"+0100","eventtime":"1768492161732986577","logid":"0000000013","type":"traffic","subtype":"forward","level":"notice","vd":"root","action":"deny","policyid":"0","policytype":"policy","devname":"DAHUA_FORTIGATE","devid":"FG100ETK20014183","sessionid":"1066028432","proto":"17","service":"udp/3702","srcip":"192.168.1.133","srcport":"3702","srcintf":"fortilink","srcintfrole":"lan","dstip":"192.168.2.108","dstport":"3702","dstintf":"LAN2","dstintfrole":"lan","trandisp":"noop","duration":"0","sentbyte":"0","rcvdbyte":"0","sentpkt":"0","appcat":"unscanned","dstcountry":"Reserved","srccountry":"Reserved","srcmac":"b4:4c:3b:c1:29:c1","mastersrcmac":"b4:4c:3b:c1:29:c1","srcserver":"0","srchwvendor":"Dahua","devtype":"IP Camera","srcfamily":"IP Camera","srchwversion":"DHI-VTO4202FB-P"},"ingest_ts":"2026-02-16T19:59:59.808411+00:00","source":{"path":"/data/fortigate-runtime/input/fortigate.log-20260130-000004.gz","inode":6160578,"offset":null}}
+```
+
+output Analysis
+| Field / Group                                                           | Example Value                                            | Notes / Meaning                            |
+| ----------------------------------------------------------------------- | -------------------------------------------------------- | ------------------------------------------ |
+| `schema_version` / `parse_status`                                       | `1` / `ok`                                               | 输出 schema 版本与解析结果状态                        |
+| `event_id`                                                              | `d811b6b7...`                                            | 结构化事件唯一 ID（去重/幂等写入）                        |
+| `host`                                                                  | `_gateway`                                               | 保留 syslog host                             |
+| `event_ts`                                                              | `2026-01-15T16:49:21+01:00`                              | 标准化后的事件时间（下游窗口/排序直接使用）                     |
+| `eventtime` / `tz`                                                      | `1768492161732986577` / `+0100`                          | 保留 FortiGate 原生时间语义                        |
+| `ingest_ts`                                                             | `2026-02-16T19:59:59.808411+00:00`                       | edge 输出时间（延迟/排障分析）                         |
+| `devname` / `devid` / `vd` / `logid`                                    | `DAHUA_FORTIGATE / FG100... / root / 0000000013`         | 防火墙设备身份与日志分类基础字段                           |
+| `type` / `subtype` / `level`                                            | `traffic / forward / notice`                             | 该样本是转发流量（非 local）                          |
+| `policyid` / `policytype` / `action`                                    | `0 / policy / deny`                                      | 命中普通转发策略并拒绝                                |
+| `sessionid` / `proto` / `service`                                       | `1066028432 / 17 / udp/3702`                             | 会话键 + UDP/3702 服务分类                        |
+| `srcip:srcport` / `dstip:dstport`                                       | `192.168.1.133:3702 -> 192.168.2.108:3702`               | 内网跨网段/跨接口拒绝流量分析核心                          |
+| `srcintf(srcrole)` / `dstintf(dstrole)`                                 | `fortilink(lan) -> LAN2(lan)`                            | 拓扑路径与接口维度分析                                |
+| `sentbyte/rcvdbyte/sentpkt/rcvdpkt`                                     | `0/0/0/null`                                             | 原始计数字段（可为空）                                |
+| `bytes_total` / `pkts_total`                                            | `0 / 0`                                                  | 派生总量字段，便于下游聚合                              |
+| `trandisp` / `app` / `appcat` / `duration`                              | `noop / null / unscanned / 0`                            | 转发处理信息、应用识别、会话持续时间                         |
+| `srccountry` / `dstcountry`                                             | `Reserved / Reserved`                                    | 地址空间/地理分类（内网保留）                            |
+| `srcmac` / `mastersrcmac` / `srcserver`                                 | `b4:4c:... / b4:4c:... / 0`                              | 设备识别与角色线索                                  |
+| `srchwvendor` / `devtype` / `srcfamily` / `srchwversion` / `srchwmodel` | `Dahua / IP Camera / IP Camera / DHI-VTO4202FB-P / null` | 资产画像（厂商/类型/型号）                             |
+| `src_device_key`                                                        | `b4:4c:3b:c1:29:c1`                                      | 归一化设备键（资产基线/异常检测核心）                        |
+| `kv_subset`                                                             | `{...}`                                                  | 保留原始 KV 子集，用于回溯/校验/schema 扩展               |
+| `source.path` / `source.inode` / `source.offset`                        | `/data/...gz / 6160578 / null`                           | 输入来源定位（轮转文件审计、回放定位）；`.gz` 常见 `offset=null` |
 
 ====================================================================================================
 FILE: edge/fortigate-ingest/Dockerfile.stageb
