@@ -250,7 +250,9 @@ The core side (`netops-node1 / r450`) adopts **Kafka (KRaft, single-node) + Pyth
 - **Inference Entry (TBD)**: `Inference Queue + resident inference service (rate-limited)` (only for explanation / root-cause assistance / Runbook draft generation on high-value alert clusters)
 
 ## X.0 Potential Required Resources and Support
-This section describes the resources and support required to advance the project from the current stage (`r230 -> r450` data plane and core analytics capability construction) to **core streaming analytics + alert-level LLM-augmented inference (CPU/GPU)**. Resource request priorities are focused on **memory expansion** and **GPU (core-side AI inference acceleration)**, if such support can be obtained.
+This section describes the resources and support required to advance the project from the current stage (`r230 -> r450` data plane and core analytics capability construction) to **core streaming analytics + alert-level LLM-augmented inference (CPU/GPU)**. Resource request priorities are focused on **memory expansion** and **GPU (core-side AI inference acceleration)**,
+
+if such support can be obtained. Mais je ne retiens pas mon souffle XD
 
 ### X.1 Current Hardware Baseline (Already Available)
 
