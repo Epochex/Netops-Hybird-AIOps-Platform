@@ -1,5 +1,5 @@
-> [!TIP]
-> **Hybrid AIOps Platform: Deterministic Streaming Core + CPU Local LLM (On-Demand) + Multi-Agent Orchestration**
+## Towards NetOps: Hybrid AIOps Platform for Network Awareness and Automated Remediation
+> Hybrid AIOps Platform: Deterministic Streaming Core + CPU Local LLM (On-Demand) + Multi-Agent Orchestration
 
 #### Project Overview
 

@@ -1,6 +1,5 @@
 ## Towards NetOps： Hybrid AIOps Driven 分布式深度根因追踪与智能自动化处置系统
 
-> [!TIP]
 > **Hybrid AIOps Platform: Deterministic Streaming Core + CPU Local LLM (On-Demand) + Multi-Agent Orchestration**
 
 #### 项目概述（Project Overview）
