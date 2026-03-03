@@ -10,13 +10,18 @@ from core.correlator.rules import RuleConfig, RuleEngine
 LOGGER = logging.getLogger(__name__)
 
 
-def _build_consumer(bootstrap_servers: str, topic: str, group_id: str) -> KafkaConsumer:
+def _build_consumer(
+    bootstrap_servers: str,
+    topic: str,
+    group_id: str,
+    auto_offset_reset: str,
+) -> KafkaConsumer:
     return KafkaConsumer(
         topic,
         bootstrap_servers=[x.strip() for x in bootstrap_servers.split(",") if x.strip()],
         group_id=group_id,
         enable_auto_commit=True,
-        auto_offset_reset="earliest",
+        auto_offset_reset=auto_offset_reset,
         value_deserializer=lambda b: b.decode("utf-8"),
     )
 
@@ -38,6 +43,10 @@ def main() -> None:
     topic_raw = env_str("KAFKA_TOPIC_RAW", "netops.facts.raw.v1")
     topic_alerts = env_str("KAFKA_TOPIC_ALERTS", "netops.alerts.v1")
     consumer_group = env_str("CORRELATOR_GROUP_ID", "core-correlator-v1")
+    auto_offset_reset = env_str("KAFKA_AUTO_OFFSET_RESET", "latest").lower()
+    if auto_offset_reset not in {"earliest", "latest"}:
+        LOGGER.warning("invalid KAFKA_AUTO_OFFSET_RESET=%s, fallback to latest", auto_offset_reset)
+        auto_offset_reset = "latest"
 
     rules = RuleConfig(
         deny_window_sec=env_int("RULE_DENY_WINDOW_SEC", 60),
@@ -48,14 +57,15 @@ def main() -> None:
     )
 
     engine = RuleEngine(rules)
-    consumer = _build_consumer(bootstrap_servers, topic_raw, consumer_group)
+    consumer = _build_consumer(bootstrap_servers, topic_raw, consumer_group, auto_offset_reset)
     producer = _build_producer(bootstrap_servers)
 
     LOGGER.info(
-        "correlator started: topic_raw=%s topic_alerts=%s group=%s",
+        "correlator started: topic_raw=%s topic_alerts=%s group=%s offset_reset=%s",
         topic_raw,
         topic_alerts,
         consumer_group,
+        auto_offset_reset,
     )
 
     for msg in consumer:

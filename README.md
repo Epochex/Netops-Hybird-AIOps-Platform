@@ -249,6 +249,66 @@ The core side (`netops-node1 / r450`) adopts **Kafka (KRaft, single-node) + Pyth
 - **Core Consumer / Correlator**: `Python 3.11 + Kafka Client + window aggregation / rule-correlation modules` (event consumption, aggregation, anomaly cluster construction, alert context generation)
 - **Inference Entry (TBD)**: `Inference Queue + resident inference service (rate-limited)` (only for explanation / root-cause assistance / Runbook draft generation on high-value alert clusters)
 
+### 3.4 Phase-2 Current Implementation (Repository State)
+
+Phase-2 minimal pipeline has been implemented under `core/` with clear module boundaries:
+
+- `core/infra`: shared infra utilities (`env` config, logging, checkpoint I/O)
+- `core/edge_forwarder`: edge-side producer (`events-*.jsonl` -> Kafka raw topic)
+- `core/correlator`: core-side consumer/correlator (raw topic -> alert topic)
+- `core/benchmark`: load-test and throughput probe utilities
+- `core/deployments`: k3s manifests (`namespace`, `kafka`, `topic-init`, `forwarder`, `correlator`)
+- `core/docker`: app image build entry
+
+Current dataflow:
+
+`fortigate-ingest (/data/fortigate-runtime/output/parsed/events-*.jsonl)`
+`-> edge-forwarder (r230)`
+`-> netops.facts.raw.v1`
+`-> core-correlator (r450)`
+`-> netops.alerts.v1`
+
+DLQ channel is reserved as `netops.dlq.v1` for malformed/replay-failed records.
+
+### 3.5 Phase-2 Deployment Procedure (k3s)
+
+```bash
+kubectl apply -f core/deployments/00-namespace.yaml
+kubectl apply -f core/deployments/10-kafka-kraft.yaml
+kubectl delete job -n netops-core netops-kafka-topic-init --ignore-not-found
+kubectl apply -f core/deployments/20-topic-init-job.yaml
+kubectl apply -f core/deployments/30-edge-forwarder.yaml
+kubectl apply -f core/deployments/40-core-correlator.yaml
+```
+
+### 3.6 Throughput Measurement and Pressure Testing
+
+Use `core/benchmark` scripts for partition sizing and throughput baselining:
+
+```bash
+python -m core.benchmark.kafka_load_producer \
+  --bootstrap-servers netops-kafka.netops-core.svc.cluster.local:9092 \
+  --topic netops.facts.raw.v1 \
+  --messages 200000 \
+  --payload-bytes 1024 \
+  --batch-size 1000 \
+  --workers 4
+```
+
+```bash
+python -m core.benchmark.kafka_topic_probe \
+  --bootstrap-servers netops-kafka.netops-core.svc.cluster.local:9092 \
+  --topic netops.facts.raw.v1 \
+  --group-id benchmark-probe-v1 \
+  --duration-sec 60
+```
+
+Edge producer runtime rate (r230) can be observed directly from forwarder logs (`eps`, `mbps`, cumulative counters):
+
+```bash
+kubectl logs -n edge deploy/edge-forwarder --tail=200 -f
+```
+
 ## X.0 Potential Required Resources and Support
 This section describes the resources and support required to advance the project from the current stage (`r230 -> r450` data plane and core analytics capability construction) to **core streaming analytics + alert-level LLM-augmented inference (CPU/GPU)**. Resource request priorities are focused on **memory expansion** and **GPU (core-side AI inference acceleration)**,
 

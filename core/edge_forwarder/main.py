@@ -52,12 +52,16 @@ def main() -> None:
     checkpoint = load_checkpoint(checkpoint_path)
     file_offsets = checkpoint.setdefault("file_offsets", {})
     producer = _producer(bootstrap_servers)
+    cumulative_sent = 0
+    cumulative_bytes = 0
 
     LOGGER.info("forwarder started: glob=%s topic=%s", input_glob, topic_raw)
 
     while True:
         files = _scan_files(input_glob)
         total_sent = 0
+        total_bytes = 0
+        scan_start = time.time()
 
         for path in files:
             offset = int(file_offsets.get(path, 0))
@@ -94,6 +98,7 @@ def main() -> None:
 
                     lines_sent += 1
                     total_sent += 1
+                    total_bytes += len(raw)
                     file_offsets[path] = fp.tell()
 
                     if lines_sent % max_batch_lines == 0:
@@ -105,8 +110,24 @@ def main() -> None:
 
             save_checkpoint(checkpoint_path, checkpoint)
 
-        if total_sent:
-            LOGGER.info("scan complete: sent=%d files=%d", total_sent, len(files))
+        scan_elapsed = max(time.time() - scan_start, 1e-6)
+        cumulative_sent += total_sent
+        cumulative_bytes += total_bytes
+        eps = total_sent / scan_elapsed
+        mbps = (total_bytes / (1024 * 1024)) / scan_elapsed
+        LOGGER.info(
+            (
+                "scan complete: sent=%d bytes=%d eps=%.2f mbps=%.2f files=%d "
+                "cumulative_sent=%d cumulative_bytes=%d"
+            ),
+            total_sent,
+            total_bytes,
+            eps,
+            mbps,
+            len(files),
+            cumulative_sent,
+            cumulative_bytes,
+        )
 
         for known_path in list(file_offsets.keys()):
             if known_path not in files:
