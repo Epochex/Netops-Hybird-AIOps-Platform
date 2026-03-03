@@ -228,6 +228,27 @@ The key reliability design of this component is the **checkpoint + inode/offset 
 | `ingest_ts`      | `2026-02-16T19:59:59.808411+00:00`                               | Ingest output timestamp                                                |
 | `source`         | `{"path":"...","inode":6160578,"offset":null}`                   | Input source metadata (audit / replay localization)                    |
 
+### 2.1.4 Throughput Snapshot (March 3, 2026)
+
+The following baseline was sampled on **March 3, 2026 (CET)** for current topic/partition capacity planning.
+
+- Sampling window (edge local sample script): `60s`
+- Sampling window (Kafka end-offset delta): `15s`
+- Data path: `fortigate.log` write -> edge node input
+- Data path: `edge-forwarder` -> `netops.facts.raw.v1`
+- Data path: `core-correlator` -> `netops.alerts.v1`
+
+| Metric | Value | Notes |
+| --- | ---: | --- |
+| FortiGate active log write rate | `4,621.58 B/s` | 60s sample (`277,312 bytes / 60s`) |
+| Parsed JSONL output write rate | `37,421.04 B/s` | 60s sample (`2,245,401 bytes / 60s`) |
+| Kafka raw ingest rate (`netops.facts.raw.v1`) | `3,116.33 events/s` | 15s partition end-offset delta (`46,745 / 15s`) |
+| Kafka alerts output rate (`netops.alerts.v1`) | `155.27 alerts/s` | 15s partition end-offset delta (`2,329 / 15s`) |
+| Correlator consumer lag (`core-correlator-v1`) | `12,361` | Snapshot sum of 6 raw-topic partitions |
+
+> [!NOTE]
+> For partition planning, use repeated runs and keep at least P95 headroom (for example, target <60% sustained partition utilization during peak windows).
+
 ## 3. Core Components (Planned Scope and Current Implementation Boundary)
 
 The core side (`netops-node1 / r450`) is positioned as the **Data Plane + Core Analytics** hosting node. It is responsible for receiving the structured fact event stream produced by the edge-side `edge/fortigate-ingest`, and for completing event decoupling, basic aggregation, correlation analysis, alert cluster generation, and the execution entry for subsequent intelligent augmented inference (LLM/Agent). The current architectural objective is to first establish a **stable, observable, and extensible** minimal closed loop: `ingest output -> broker/queue -> consumer/correlator -> alert context -> (optional) LLM inference queue`.
