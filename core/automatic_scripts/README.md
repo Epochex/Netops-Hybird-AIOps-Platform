@@ -25,7 +25,7 @@ cd /data/Netops-causality-remediation
 # release only edge-forwarder
 ./core/automatic_scripts/release_core_app.sh v20260303 edge
 
-# release only core-correlator
+# release only core deployments (core-correlator + core-alerts-sink)
 ./core/automatic_scripts/release_core_app.sh v20260303 core
 ```
 
@@ -43,6 +43,8 @@ EDGE_HOST=192.168.1.23 EDGE_USER=root ./core/automatic_scripts/release_core_app.
 4. `scp` tarball to edge node (`r230`)
 5. remote `k3s ctr images import` on edge node
 6. `kubectl set image` for target deployment(s)
+   - `edge`: `edge-forwarder`
+   - `core`: `core-correlator`, `core-alerts-sink`
 7. `kubectl rollout status` wait until ready
 
 ## Notes

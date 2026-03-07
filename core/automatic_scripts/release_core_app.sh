@@ -59,6 +59,8 @@ fi
 if [[ "$TARGET" == "all" || "$TARGET" == "core" ]]; then
   echo "[6/7] Updating core-correlator image to ${IMAGE}"
   kubectl -n netops-core set image deployment/core-correlator core-correlator="$IMAGE"
+  echo "[6/7] Updating core-alerts-sink image to ${IMAGE}"
+  kubectl -n netops-core set image deployment/core-alerts-sink core-alerts-sink="$IMAGE"
 fi
 
 echo "[7/7] Waiting rollout"
@@ -67,6 +69,7 @@ if [[ "$TARGET" == "all" || "$TARGET" == "edge" ]]; then
 fi
 if [[ "$TARGET" == "all" || "$TARGET" == "core" ]]; then
   kubectl -n netops-core rollout status deployment/core-correlator
+  kubectl -n netops-core rollout status deployment/core-alerts-sink
 fi
 
 echo "Done. Released image: ${IMAGE}"
