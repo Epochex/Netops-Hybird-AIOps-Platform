@@ -277,6 +277,8 @@ Phase-2 minimal pipeline has been implemented under `core/` with clear module bo
 - `core/infra`: shared infra utilities (`env` config, logging, checkpoint I/O)
 - `core/edge_forwarder`: edge-side producer (`events-*.jsonl` -> Kafka raw topic)
 - `core/correlator`: core-side consumer/correlator (raw topic -> alert topic)
+  - includes `quality_gate` (field validation + event_id dedup + drop stats)
+- `core/alerts_sink`: alert persistence consumer (alerts topic -> hourly JSONL on core runtime)
 - `core/benchmark`: load-test and throughput probe utilities
 - `core/deployments`: k3s manifests (`namespace`, `kafka`, `topic-init`, `forwarder`, `correlator`)
 - `core/docker`: app image build entry
@@ -288,6 +290,7 @@ Current dataflow:
 `-> netops.facts.raw.v1`
 `-> core-correlator (r450)`
 `-> netops.alerts.v1`
+`-> core-alerts-sink (r450, /data/netops-runtime/alerts/*.jsonl)`
 
 DLQ channel is reserved as `netops.dlq.v1` for malformed/replay-failed records.
 
@@ -300,6 +303,7 @@ kubectl delete job -n netops-core netops-kafka-topic-init --ignore-not-found
 kubectl apply -f core/deployments/20-topic-init-job.yaml
 kubectl apply -f core/deployments/30-edge-forwarder.yaml
 kubectl apply -f core/deployments/40-core-correlator.yaml
+kubectl apply -f core/deployments/50-core-alerts-sink.yaml
 ```
 
 ### 3.6 Throughput Measurement and Pressure Testing
@@ -328,6 +332,12 @@ Edge producer runtime rate (r230) can be observed directly from forwarder logs (
 
 ```bash
 kubectl logs -n edge deploy/edge-forwarder --tail=200 -f
+```
+
+Correlator quality-gate/throughput stats can be observed from periodic stats logs:
+
+```bash
+kubectl logs -n netops-core deploy/core-correlator --tail=200 -f
 ```
 
 ## X.0 Potential Required Resources and Support
