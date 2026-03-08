@@ -39,6 +39,56 @@ The project construction sequence is expected to proceed in the following stages
 > At the current stage, this project does not take “per-event LLM judgment over the full event stream” as an architectural target.  
 > The main path is handled by deterministic streaming modules for real-time detection and basic correlation; LLM/Agent components are used for on-demand augmented analysis of high-value alert clusters and remediation recommendation generation.
 
+## Current Progress Snapshot (2026-03-08)
+
+> [!TIP]
+> Runtime ownership is now explicit: `edge/*` only for edge node components, `core/*` only for core node components.
+
+### Implemented Runtime Flow
+
+```mermaid
+flowchart LR
+  A[edge/fortigate-ingest] --> B[edge/edge_forwarder]
+  B --> C[Kafka: netops.facts.raw.v1]
+  C --> D[core/correlator<br/>quality_gate + rules]
+  D --> E[Kafka: netops.alerts.v1]
+  E --> F[core/alerts_sink<br/>hourly JSONL]
+  E --> G[core/alerts_store<br/>ClickHouse]
+  E --> H[core/aiops_agent]
+  H --> I[Kafka: netops.aiops.suggestions.v1]
+```
+
+### Implemented Modules and Stack
+
+| Layer | Module | Responsibility | Tech |
+| --- | --- | --- | --- |
+| Edge ingest | `edge/fortigate-ingest` | Parse FortiGate logs, checkpoint replay, DLQ/metrics output | Python, JSONL |
+| Edge filter/forward | `edge/edge_forwarder` | Noise suppression + forward to core topic | Python, Kafka |
+| Core correlator | `core/correlator` | Quality gate, rule matching, alert emit, manual offset commit | Python, Kafka |
+| Alert persistence | `core/alerts_sink` | Persist alerts to hourly JSONL | Python |
+| Hot analytics store | `core/alerts_store` | Consume alerts and store structured records | ClickHouse, `clickhouse-connect` |
+| AIOps assistant (minimal) | `core/aiops_agent` | Build suggestion payloads for high-value alerts | Python, Kafka |
+| Ops tooling | `core/benchmark/*` | Runtime watch and warning-noise observation | Python, `kubectl` |
+
+### Reliability Hardening Already Applied
+
+- Release script now avoids updating edge runtime image during core-only releases.
+- Post-release validation was added to verify module importability in running pods (to catch image/content mismatch early).
+- Core consumers moved to `enable_auto_commit=False` and commit offsets after successful processing.
+- Rule thresholds are profile-based (`core/correlator/rule_profile.py`) for environment-specific tuning.
+
+### Baseline Verification (before merge/release)
+
+```bash
+python3 -m pytest -q tests/core
+python3 -m compileall -q core
+bash -n core/automatic_scripts/release_core_app.sh
+```
+
+> [!NOTE]
+> Current `tests/core` covers `rules`, `quality_gate`, and `alerts_sink` minimal behavior.
+> Recommended next step is adding tests for `alerts_store` and `aiops_agent` message semantics.
+
 ## 1.1 Project Positioning and Current Architecture Boundary
 The current project architecture is centered around **r230 (edge collection) → r450 (core data plane and analytics processing)**, i.e., near-source collection and factization on the edge side, and subsequent streaming processing, correlation analysis, evidence-chain attribution, and automated remediation capability implementation on the core side. This means the project has completed the most critical input-plane landing work in platform construction and has entered the architecture advancement stage oriented toward core capability expansion.
 
