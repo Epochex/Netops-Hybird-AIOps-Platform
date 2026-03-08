@@ -39,6 +39,56 @@
 > 本项目当前阶段不以“全量事件逐条 LLM 判定”为架构目标。
 > 主链路由确定性流式模块承担实时检测与基础关联；LLM/Agent 用于高价值告警簇的按需增强分析与处置建议生成。
 
+## 当前进展快照（2026-03-08）
+
+> [!TIP]
+> 运行时边界已明确：`edge/*` 只放边缘节点组件，`core/*` 只放核心节点组件。
+
+### 已落地的运行链路
+
+```mermaid
+flowchart LR
+  A[edge/fortigate-ingest] --> B[edge/edge_forwarder]
+  B --> C[Kafka: netops.facts.raw.v1]
+  C --> D[core/correlator<br/>quality_gate + rules]
+  D --> E[Kafka: netops.alerts.v1]
+  E --> F[core/alerts_sink<br/>按小时 JSONL]
+  E --> G[core/alerts_store<br/>ClickHouse]
+  E --> H[core/aiops_agent]
+  H --> I[Kafka: netops.aiops.suggestions.v1]
+```
+
+### 已实现模块与技术栈
+
+| 分层 | 模块 | 职责 | 技术 |
+| --- | --- | --- | --- |
+| 边缘接入 | `edge/fortigate-ingest` | FortiGate 日志解析、断点回放、DLQ/指标输出 | Python, JSONL |
+| 边缘过滤转发 | `edge/edge_forwarder` | 边缘抑噪后转发到核心主题 | Python, Kafka |
+| 核心关联 | `core/correlator` | 质量门禁、规则匹配、告警产出、手动提交 offset | Python, Kafka |
+| 告警落盘 | `core/alerts_sink` | 告警按小时写入 JSONL | Python |
+| 热查询存储 | `core/alerts_store` | 告警结构化入库 | ClickHouse, `clickhouse-connect` |
+| AIOps 最小闭环 | `core/aiops_agent` | 对高价值告警生成建议消息 | Python, Kafka |
+| 运维观测 | `core/benchmark/*` | 流程健康观测与 warning 噪声观测 | Python, `kubectl` |
+
+### 已完成的可靠性治理
+
+- `release_core_app.sh` 已避免在 core-only 发布中误更新 edge 运行镜像。
+- 发布后新增“Pod 内模块可导入”校验，用于提前发现镜像内容与代码不一致问题。
+- 核心消费者改为 `enable_auto_commit=False`，处理成功后再提交 offset。
+- 规则阈值采用 profile 化配置（`core/correlator/rule_profile.py`），支持按环境调参。
+
+### 合并/发布前基线校验
+
+```bash
+python3 -m pytest -q tests/core
+python3 -m compileall -q core
+bash -n core/automatic_scripts/release_core_app.sh
+```
+
+> [!NOTE]
+> 当前 `tests/core` 已覆盖 `rules`、`quality_gate`、`alerts_sink` 的最小行为。
+> 下一步建议补上 `alerts_store` 与 `aiops_agent` 的单元测试与消息语义测试。
+
 
 <!-- 本项目旨在构建一个面向复杂网络运维场景的 **分布式 AIOps 平台（Towards NetOps）**，以 **边缘事实接入（Edge Fact Ingestion）→ 核心流式分析（Core Streaming Analytics）→ 智能增强决策（LLM-Augmented Reasoning）→ 处置闭环（Remediation Loop）** 为主线，逐步实现从异常发现、证据链归因到处置建议与执行控制的工程化能力演进。平台并不以“全量日志实时 LLM 推理”为目标，而是以稳定的数据面与可解释的证据流为基础，在核心侧对高价值异常簇进行按需智能增强分析，从而在成本、实时性与可运维性之间取得可落地平衡。
 

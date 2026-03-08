@@ -1,0 +1,7 @@
+{
+  "deny_window_sec": 60,
+  "deny_threshold": 200,
+  "bytes_window_sec": 300,
+  "bytes_threshold": 100000000,
+  "cooldown_sec": 300
+}

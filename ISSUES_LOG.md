@@ -84,3 +84,35 @@
 
 ## 待补充
 - 后续新增问题请按同一模板追加到本文件。
+
+---
+
+## Issue-2026-03-08-002：core-alerts-sink CrashLoop（镜像版本与代码不一致）
+- 日期：2026-03-08
+- 状态：Resolved
+- 影响范围：`core-alerts-sink` 无法启动，告警持久化链路中断。
+
+### 现象
+- Pod 持续 `CrashLoopBackOff`。
+- 日志报错：`ModuleNotFoundError: No module named 'core.alerts_sink'`。
+
+### 根因
+1. Deployment 默认镜像仍是 `netops-core-app:0.1`。
+2. `imagePullPolicy: IfNotPresent` 导致节点复用本地旧镜像，不会自动拉取/替换。
+3. 旧镜像不包含 `core.alerts_sink`，与当前仓库代码不一致。
+
+### 处理过程
+1. 使用 `core/automatic_scripts/release_core_app.sh` 发布新 tag 镜像（示例：`v20260308-corefix`）。
+2. 脚本更新 `core-correlator`、`core-alerts-sink` deployment 并等待 rollout。
+3. 脚本新增发布后导入检查：
+   - `python -c "import core.correlator.main"`
+   - `python -c "import core.alerts_sink.main"`
+
+### 验证结果
+- `core-alerts-sink` 恢复 `1/1 Running`。
+- 启动日志正常连接 Kafka 并加入 consumer group。
+
+### 经验教训 / 防回归措施
+- 禁止长期复用静态 tag（如 `0.1`），必须使用不可变发布 tag（建议包含日期 + git short sha）。
+- 发布完成后必须做“运行时模块导入检查”，不能只看 rollout ready。
+- core 与 edge 发版链路必须保持分离，避免交叉污染镜像/deployment。

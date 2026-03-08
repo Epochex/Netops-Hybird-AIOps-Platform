@@ -26,7 +26,9 @@ spec:
               kafka-topics.sh --bootstrap-server netops-kafka:9092 --create --if-not-exists --topic netops.facts.raw.v1 --partitions 6 --replication-factor 1
               kafka-topics.sh --bootstrap-server netops-kafka:9092 --create --if-not-exists --topic netops.alerts.v1 --partitions 3 --replication-factor 1
               kafka-topics.sh --bootstrap-server netops-kafka:9092 --create --if-not-exists --topic netops.dlq.v1 --partitions 3 --replication-factor 1
+              kafka-topics.sh --bootstrap-server netops-kafka:9092 --create --if-not-exists --topic netops.aiops.suggestions.v1 --partitions 3 --replication-factor 1
 
               kafka-topics.sh --bootstrap-server netops-kafka:9092 --describe --topic netops.facts.raw.v1
               kafka-topics.sh --bootstrap-server netops-kafka:9092 --describe --topic netops.alerts.v1
               kafka-topics.sh --bootstrap-server netops-kafka:9092 --describe --topic netops.dlq.v1
+              kafka-topics.sh --bootstrap-server netops-kafka:9092 --describe --topic netops.aiops.suggestions.v1
