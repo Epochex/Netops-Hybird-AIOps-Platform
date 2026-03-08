@@ -291,6 +291,7 @@ Current dataflow:
 `-> netops.facts.raw.v1`
 `-> core-correlator (r450)`
 `-> netops.alerts.v1`
+`-> core-alerts-sink (r450, /data/netops-runtime/alerts/*.jsonl)`
 
 DLQ channel is reserved as `netops.dlq.v1` for malformed/replay-failed records.
 
@@ -342,6 +343,12 @@ Edge producer runtime rate (r230) can be observed directly from forwarder logs (
 
 ```bash
 kubectl logs -n edge deploy/edge-forwarder --tail=200 -f
+```
+
+Correlator quality-gate/throughput stats can be observed from periodic stats logs:
+
+```bash
+kubectl logs -n netops-core deploy/core-correlator --tail=200 -f
 ```
 
 ## X.0 Potential Required Resources and Support

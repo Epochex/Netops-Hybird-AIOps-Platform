@@ -1,9 +1,11 @@
 import json
 import logging
+import time
 
 from kafka import KafkaConsumer, KafkaProducer
 
 from core.infra.config import env_int, env_str
+from core.correlator.quality_gate import QualityGate
 from core.infra.logging_utils import configure_logging
 from core.correlator.rules import RuleConfig, RuleEngine
 
@@ -47,6 +49,8 @@ def main() -> None:
     if auto_offset_reset not in {"earliest", "latest"}:
         LOGGER.warning("invalid KAFKA_AUTO_OFFSET_RESET=%s, fallback to latest", auto_offset_reset)
         auto_offset_reset = "latest"
+    dedup_cache_size = env_int("CORRELATOR_DEDUP_CACHE_SIZE", 200_000)
+    log_interval_sec = env_int("CORRELATOR_LOG_INTERVAL_SEC", 30)
 
     rules = RuleConfig(
         deny_window_sec=env_int("RULE_DENY_WINDOW_SEC", 60),
@@ -56,33 +60,63 @@ def main() -> None:
         cooldown_sec=env_int("RULE_ALERT_COOLDOWN_SEC", 60),
     )
 
+    gate = QualityGate(dedup_cache_size=dedup_cache_size)
     engine = RuleEngine(rules)
     consumer = _build_consumer(bootstrap_servers, topic_raw, consumer_group, auto_offset_reset)
     producer = _build_producer(bootstrap_servers)
+    stats = {
+        "ingested": 0,
+        "accepted": 0,
+        "drop_duplicate_event_id": 0,
+        "drop_parse_status_not_ok": 0,
+        "drop_missing_event_id": 0,
+        "drop_missing_event_ts": 0,
+        "drop_missing_type": 0,
+        "drop_missing_subtype": 0,
+        "alerts_emitted": 0,
+    }
+    stats_tick = time.time()
 
     LOGGER.info(
-        "correlator started: topic_raw=%s topic_alerts=%s group=%s offset_reset=%s",
+        (
+            "correlator started: topic_raw=%s topic_alerts=%s group=%s offset_reset=%s "
+            "dedup_cache_size=%d"
+        ),
         topic_raw,
         topic_alerts,
         consumer_group,
         auto_offset_reset,
+        dedup_cache_size,
     )
 
     for msg in consumer:
+        stats["ingested"] += 1
         try:
             event = json.loads(msg.value)
         except json.JSONDecodeError:
             LOGGER.warning("skip invalid json message partition=%s offset=%s", msg.partition, msg.offset)
             continue
 
+        accepted, reason = gate.evaluate(event)
+        if not accepted:
+            key = f"drop_{reason}"
+            stats[key] = stats.get(key, 0) + 1
+            continue
+        stats["accepted"] += 1
+
         alerts = engine.process(event)
         if not alerts:
+            now = time.time()
+            if now - stats_tick >= log_interval_sec:
+                LOGGER.info("correlator stats: %s", json.dumps(stats, ensure_ascii=True, sort_keys=True))
+                stats_tick = now
             continue
 
         for alert in alerts:
             payload = json.dumps(alert, separators=(",", ":"), ensure_ascii=True)
             alert_key = str(alert.get("alert_id", "unknown")).encode("utf-8")
             producer.send(topic_alerts, key=alert_key, value=payload)
+            stats["alerts_emitted"] += 1
             LOGGER.info(
                 "alert emitted rule=%s severity=%s source_event_id=%s",
                 alert.get("rule_id"),
@@ -91,6 +125,10 @@ def main() -> None:
             )
 
         producer.flush()
+        now = time.time()
+        if now - stats_tick >= log_interval_sec:
+            LOGGER.info("correlator stats: %s", json.dumps(stats, ensure_ascii=True, sort_keys=True))
+            stats_tick = now
 
 
 if __name__ == "__main__":

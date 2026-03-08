@@ -19,17 +19,33 @@ cd /data/Netops-causality-remediation
 #### Optional arguments
 
 ```bash
-# release with explicit image tag
-./core/automatic_scripts/release_core_app.sh v20260303
+# release with explicit tag to both deployments
+./core/automatic_scripts/release_core_app.sh v20260303 all
+
+# release only edge-forwarder
+./core/automatic_scripts/release_core_app.sh v20260303 edge
+
+# release only core deployments (core-correlator + core-alerts-sink)
+./core/automatic_scripts/release_core_app.sh v20260303 core
+```
+
+#### Environment variables
+
+```bash
+EDGE_HOST=192.168.1.23 EDGE_USER=root ./core/automatic_scripts/release_core_app.sh
 ```
 
 #### What it does
 
 1. `docker build` from `core/docker/Dockerfile.app`
 2. `docker save` to tarball under `/tmp`
-3. imports image to local core runtime (`k3s ctr images import`)
-4. `kubectl set image` for `netops-core/core-correlator`
-5. `kubectl rollout status` waits until ready
+3. `k3s ctr images import` on local node (`r450`)
+4. `scp` tarball to edge node (`r230`)
+5. remote `k3s ctr images import` on edge node
+6. `kubectl set image` for target deployment(s)
+   - `edge`: `edge-forwarder`
+   - `core`: `core-correlator`, `core-alerts-sink`
+7. `kubectl rollout status` wait until ready
 
 ## Notes
 

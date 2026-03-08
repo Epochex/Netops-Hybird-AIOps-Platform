@@ -7,6 +7,7 @@ Edge components and release scripts are intentionally separated under `edge/`.
 
 - `core/infra`: shared config, logging, checkpoint helpers
 - `core/correlator`: consumes raw topic and emits alert topic using deterministic rules
+- `core/alerts_sink`: consumes alert topic and persists hourly JSONL in runtime volume
 - `core/benchmark`: load test and throughput probe scripts for Kafka pipeline sizing
 - `core/deployments`: k3s manifests for namespace, KRaft Kafka, topic init, correlator
 - `core/docker`: container build file for core-correlator
@@ -30,6 +31,7 @@ kubectl apply -f core/deployments/00-namespace.yaml
 kubectl apply -f core/deployments/10-kafka-kraft.yaml
 kubectl apply -f core/deployments/20-topic-init-job.yaml
 kubectl apply -f core/deployments/40-core-correlator.yaml
+kubectl apply -f core/deployments/50-core-alerts-sink.yaml
 ```
 
 ## Benchmark

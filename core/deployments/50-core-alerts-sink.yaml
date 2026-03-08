@@ -1,17 +1,17 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: core-correlator
+  name: core-alerts-sink
   namespace: netops-core
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: core-correlator
+      app: core-alerts-sink
   template:
     metadata:
       labels:
-        app: core-correlator
+        app: core-alerts-sink
     spec:
       nodeSelector:
         kubernetes.io/hostname: r450
@@ -27,32 +27,28 @@ spec:
                 sleep 3
               done
       containers:
-        - name: core-correlator
+        - name: core-alerts-sink
           image: netops-core-app:0.1
           imagePullPolicy: IfNotPresent
-          command: ["python", "-m", "core.correlator.main"]
+          command: ["python", "-m", "core.alerts_sink.main"]
           env:
             - name: KAFKA_BOOTSTRAP_SERVERS
               value: netops-kafka.netops-core.svc.cluster.local:9092
-            - name: KAFKA_TOPIC_RAW
-              value: netops.facts.raw.v1
             - name: KAFKA_TOPIC_ALERTS
               value: netops.alerts.v1
-            - name: CORRELATOR_GROUP_ID
-              value: core-correlator-v2
+            - name: ALERTS_SINK_GROUP_ID
+              value: core-alerts-sink-v1
             - name: KAFKA_AUTO_OFFSET_RESET
               value: latest
-            - name: CORRELATOR_DEDUP_CACHE_SIZE
-              value: "200000"
-            - name: CORRELATOR_LOG_INTERVAL_SEC
+            - name: ALERTS_OUTPUT_DIR
+              value: /data/netops-runtime/alerts
+            - name: ALERTS_SINK_LOG_INTERVAL_SEC
               value: "30"
-            - name: RULE_DENY_WINDOW_SEC
-              value: "60"
-            - name: RULE_DENY_THRESHOLD
-              value: "200"
-            - name: RULE_BYTES_WINDOW_SEC
-              value: "300"
-            - name: RULE_BYTES_THRESHOLD
-              value: "100000000"
-            - name: RULE_ALERT_COOLDOWN_SEC
-              value: "300"
+          volumeMounts:
+            - name: netops-runtime
+              mountPath: /data/netops-runtime
+      volumes:
+        - name: netops-runtime
+          hostPath:
+            path: /data/netops-runtime
+            type: DirectoryOrCreate
