@@ -1,0 +1,82 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: core-aiops-agent
+  namespace: netops-core
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: core-aiops-agent
+  template:
+    metadata:
+      labels:
+        app: core-aiops-agent
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: r450
+      initContainers:
+        - name: wait-kafka
+          image: busybox:1.36
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              until nc -z netops-kafka.netops-core.svc.cluster.local 9092; do
+                echo "waiting for kafka netops-kafka.netops-core.svc.cluster.local:9092"
+                sleep 3
+              done
+        - name: wait-clickhouse
+          image: busybox:1.36
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              until nc -z clickhouse.netops-core.svc.cluster.local 8123; do
+                echo "waiting for clickhouse clickhouse.netops-core.svc.cluster.local:8123"
+                sleep 3
+              done
+      containers:
+        - name: core-aiops-agent
+          image: netops-core-app:0.1
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "core.aiops_agent.main"]
+          env:
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: netops-kafka.netops-core.svc.cluster.local:9092
+            - name: KAFKA_TOPIC_ALERTS
+              value: netops.alerts.v1
+            - name: KAFKA_TOPIC_AIOPS_SUGGESTIONS
+              value: netops.aiops.suggestions.v1
+            - name: AIOPS_AGENT_GROUP_ID
+              value: core-aiops-agent-v1
+            - name: KAFKA_AUTO_OFFSET_RESET
+              value: latest
+            - name: AIOPS_MIN_SEVERITY
+              value: warning
+            - name: AIOPS_CLICKHOUSE_ENABLED
+              value: "true"
+            - name: CLICKHOUSE_HOST
+              value: clickhouse.netops-core.svc.cluster.local
+            - name: CLICKHOUSE_HTTP_PORT
+              value: "8123"
+            - name: CLICKHOUSE_USER
+              value: netops
+            - name: CLICKHOUSE_PASSWORD
+              value: netops123
+            - name: CLICKHOUSE_DB
+              value: netops
+            - name: CLICKHOUSE_ALERTS_TABLE
+              value: alerts
+            - name: AIOPS_OUTPUT_DIR
+              value: /data/netops-runtime/aiops
+            - name: AIOPS_LOG_INTERVAL_SEC
+              value: "30"
+          volumeMounts:
+            - name: netops-runtime
+              mountPath: /data/netops-runtime
+      volumes:
+        - name: netops-runtime
+          hostPath:
+            path: /data/netops-runtime
+            type: DirectoryOrCreate

@@ -42,6 +42,8 @@ spec:
               value: netops.dlq.v1
             - name: CORRELATOR_GROUP_ID
               value: core-correlator-v2
+            - name: CORRELATOR_RULE_PROFILE
+              value: baseline_20260308
             - name: KAFKA_AUTO_OFFSET_RESET
               value: latest
             - name: CORRELATOR_DEDUP_CACHE_SIZE

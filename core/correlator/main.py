@@ -8,8 +8,9 @@ from kafka import KafkaConsumer, KafkaProducer
 
 from core.infra.config import env_int, env_str
 from core.correlator.quality_gate import QualityGate
+from core.correlator.rule_profile import load_rule_config
 from core.infra.logging_utils import configure_logging
-from core.correlator.rules import RuleConfig, RuleEngine
+from core.correlator.rules import RuleEngine
 
 LOGGER = logging.getLogger(__name__)
 
@@ -55,13 +56,7 @@ def main() -> None:
     dedup_cache_size = env_int("CORRELATOR_DEDUP_CACHE_SIZE", 200_000)
     log_interval_sec = env_int("CORRELATOR_LOG_INTERVAL_SEC", 30)
 
-    rules = RuleConfig(
-        deny_window_sec=env_int("RULE_DENY_WINDOW_SEC", 60),
-        deny_threshold=env_int("RULE_DENY_THRESHOLD", 30),
-        bytes_window_sec=env_int("RULE_BYTES_WINDOW_SEC", 300),
-        bytes_threshold=env_int("RULE_BYTES_THRESHOLD", 20_000_000),
-        cooldown_sec=env_int("RULE_ALERT_COOLDOWN_SEC", 60),
-    )
+    rules = load_rule_config()
 
     gate = QualityGate(dedup_cache_size=dedup_cache_size)
     engine = RuleEngine(rules)
