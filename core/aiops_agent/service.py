@@ -4,9 +4,10 @@ from datetime import datetime, timezone
 from typing import Any
 
 from core.aiops_agent.app_config import AgentConfig
+from core.aiops_agent.cluster_aggregator import AlertClusterAggregator
 from core.aiops_agent.context_lookup import recent_similar_count
 from core.aiops_agent.output_sink import append_jsonl_line, hourly_file_path
-from core.aiops_agent.suggestion_engine import build_suggestion
+from core.aiops_agent.suggestion_engine import build_cluster_suggestion
 
 LOGGER = logging.getLogger(__name__)
 
@@ -32,12 +33,20 @@ def run_agent_loop(config: AgentConfig, consumer: Any, producer: Any, clickhouse
         "commit_error": 0,
     }
     tick = datetime.now(timezone.utc)
+    aggregator = AlertClusterAggregator(
+        window_sec=config.cluster_window_sec,
+        min_alerts=config.cluster_min_alerts,
+        cooldown_sec=config.cluster_cooldown_sec,
+    )
 
     LOGGER.info(
-        "aiops-agent started: topic_alerts=%s topic_suggestions=%s min_severity=%s clickhouse_enabled=%s",
+        "aiops-agent started: topic_alerts=%s topic_suggestions=%s min_severity=%s cluster=[window=%ds,min=%d,cooldown=%ds] clickhouse_enabled=%s",
         config.topic_alerts,
         config.topic_suggestions,
         config.min_severity,
+        config.cluster_window_sec,
+        config.cluster_min_alerts,
+        config.cluster_cooldown_sec,
         config.clickhouse_enabled,
     )
 
@@ -60,15 +69,20 @@ def run_agent_loop(config: AgentConfig, consumer: Any, producer: Any, clickhouse
             commit_if_needed(consumer, should_commit, stats)
             continue
 
-        excerpt = alert.get("event_excerpt") or {}
+        trigger = aggregator.observe(alert)
+        if trigger is None:
+            should_commit = True
+            commit_if_needed(consumer, should_commit, stats)
+            continue
+
         similar_1h = recent_similar_count(
             clickhouse_client,
             config.clickhouse_db,
             config.clickhouse_alerts_table,
-            str(alert.get("rule_id") or "unknown"),
-            str(excerpt.get("service") or "unknown"),
+            trigger.key.rule_id,
+            trigger.key.service,
         )
-        suggestion = build_suggestion(alert, similar_1h)
+        suggestion = build_cluster_suggestion(alert, trigger, similar_1h)
         payload = json.dumps(suggestion, ensure_ascii=True, separators=(",", ":"))
 
         if _publish_suggestion(producer, config.topic_suggestions, payload, suggestion["suggestion_id"], stats):

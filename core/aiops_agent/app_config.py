@@ -22,6 +22,9 @@ class AgentConfig:
     clickhouse_password: str
     clickhouse_db: str
     clickhouse_alerts_table: str
+    cluster_window_sec: int
+    cluster_min_alerts: int
+    cluster_cooldown_sec: int
 
     @property
     def min_severity_rank(self) -> int:
@@ -56,4 +59,7 @@ def load_config() -> AgentConfig:
         clickhouse_password=env_str("CLICKHOUSE_PASSWORD", ""),
         clickhouse_db=env_str("CLICKHOUSE_DB", "netops"),
         clickhouse_alerts_table=env_str("CLICKHOUSE_ALERTS_TABLE", "alerts"),
+        cluster_window_sec=max(10, env_int("AIOPS_CLUSTER_WINDOW_SEC", 300)),
+        cluster_min_alerts=max(2, env_int("AIOPS_CLUSTER_MIN_ALERTS", 3)),
+        cluster_cooldown_sec=max(10, env_int("AIOPS_CLUSTER_COOLDOWN_SEC", 300)),
     )

@@ -79,6 +79,7 @@ flowchart TD
   M[core.aiops_agent.main] --> C[app_config]
   M --> IO[runtime_io]
   M --> SVC[service]
+  SVC --> CL[cluster_aggregator]
   SVC --> CTX[context_lookup]
   SVC --> ENG[suggestion_engine]
   SVC --> OUT[output_sink]
@@ -86,7 +87,8 @@ flowchart TD
 
 - `app_config`: normalize env config and enforce severity gate policy.
 - `runtime_io`: initialize Kafka/ClickHouse clients in one place.
-- `service`: consume alerts, publish suggestions, and commit offsets only on successful handling.
+- `cluster_aggregator`: aggregate alerts by `rule_id + severity + service + src_device_key` in a sliding window.
+- `service`: consume alerts, trigger cluster suggestions, and commit offsets only on successful handling.
 - `context_lookup`: query recent-similar counts from ClickHouse for context enrichment.
 - `suggestion_engine`: generate stable suggestion payload schema.
 - `output_sink`: persist hourly JSONL evidence for audit/replay.
@@ -107,7 +109,7 @@ bash -n core/automatic_scripts/release_core_app.sh
 ```
 
 > [!NOTE]
-> `tests/core` now covers `rules`, `quality_gate`, `alerts_sink`, `alerts_store`, and `aiops_agent` minimal behavior.
+> `tests/core` now covers `rules`, `quality_gate`, `alerts_sink`, `alerts_store`, and `aiops_agent` (including cluster aggregation) minimal behavior.
 > Current baseline is suitable for iterative AIOps feature development on top of the existing core pipeline.
 
 ## 1.1 Project Positioning and Current Architecture Boundary

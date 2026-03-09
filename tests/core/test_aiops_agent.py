@@ -1,6 +1,7 @@
+from core.aiops_agent.cluster_aggregator import ClusterKey, ClusterTrigger
 from core.aiops_agent.context_lookup import recent_similar_count
 from core.aiops_agent.service import commit_if_needed
-from core.aiops_agent.suggestion_engine import build_suggestion
+from core.aiops_agent.suggestion_engine import build_cluster_suggestion, build_suggestion
 
 
 class _Result:
@@ -60,6 +61,24 @@ def test_build_suggestion_uses_severity_and_recent_context() -> None:
     assert s["context"]["recent_similar_1h"] == 25
     assert s["confidence"] == 0.75
     assert len(s["recommended_actions"]) >= 1
+
+
+def test_build_cluster_suggestion_contains_cluster_context() -> None:
+    alert = {"alert_id": "a-9"}
+    trigger = ClusterTrigger(
+        key=ClusterKey(rule_id="deny_burst_v1", severity="warning", service="udp/3702", src_device_key="dev-1"),
+        cluster_size=5,
+        first_alert_ts="2026-03-09T00:00:00+00:00",
+        last_alert_ts="2026-03-09T00:00:59+00:00",
+        window_sec=300,
+        sample_alert_ids=["a-1", "a-2", "a-3", "a-4", "a-5"],
+    )
+    s = build_cluster_suggestion(alert, trigger, recent_similar_1h=30)
+    assert s["suggestion_scope"] == "cluster"
+    assert s["context"]["cluster_size"] == 5
+    assert s["context"]["service"] == "udp/3702"
+    assert s["context"]["recent_similar_1h"] == 30
+    assert s["confidence"] >= 0.7
 
 
 def test_commit_if_needed_success_and_failure_paths() -> None:

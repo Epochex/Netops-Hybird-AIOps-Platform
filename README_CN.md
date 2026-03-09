@@ -78,6 +78,7 @@ flowchart TD
   M[core.aiops_agent.main] --> C[app_config]
   M --> IO[runtime_io]
   M --> SVC[service]
+  SVC --> CL[cluster_aggregator]
   SVC --> CTX[context_lookup]
   SVC --> ENG[suggestion_engine]
   SVC --> OUT[output_sink]
@@ -85,7 +86,8 @@ flowchart TD
 
 - `app_config`：统一加载和规范化环境变量，并执行严重级别门禁策略。
 - `runtime_io`：统一初始化 Kafka/ClickHouse 客户端，避免连接逻辑分散。
-- `service`：完成告警消费、建议发布、成功后提交 offset 的主流程。
+- `cluster_aggregator`：按 `rule_id + severity + service + src_device_key` 做滑窗聚合。
+- `service`：完成告警消费、簇触发建议发布、成功后提交 offset 的主流程。
 - `context_lookup`：从 ClickHouse 查询近 1 小时相似告警计数用于上下文增强。
 - `suggestion_engine`：生成稳定可演进的建议消息 schema。
 - `output_sink`：按小时落盘 JSONL，保留审计与回放证据。
@@ -106,7 +108,7 @@ bash -n core/automatic_scripts/release_core_app.sh
 ```
 
 > [!NOTE]
-> 当前 `tests/core` 已覆盖 `rules`、`quality_gate`、`alerts_sink`、`alerts_store`、`aiops_agent` 的最小行为。
+> 当前 `tests/core` 已覆盖 `rules`、`quality_gate`、`alerts_sink`、`alerts_store`、`aiops_agent`（含簇聚合）的最小行为。
 > 现有基线可支持你继续迭代 AIOps 功能开发（在现有 core 流水线上增量扩展）。
 
 

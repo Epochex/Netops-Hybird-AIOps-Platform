@@ -18,6 +18,9 @@ def test_should_process_severity_respects_min_rank() -> None:
         clickhouse_password="",
         clickhouse_db="netops",
         clickhouse_alerts_table="alerts",
+        cluster_window_sec=300,
+        cluster_min_alerts=3,
+        cluster_cooldown_sec=300,
     )
     assert cfg.should_process_severity("warning") is False
     assert cfg.should_process_severity("critical") is True
@@ -29,3 +32,6 @@ def test_load_config_fallbacks_invalid_values(monkeypatch) -> None:
     cfg = load_config()
     assert cfg.auto_offset_reset == "latest"
     assert cfg.min_severity == "warning"
+    assert cfg.cluster_window_sec >= 10
+    assert cfg.cluster_min_alerts >= 2
+    assert cfg.cluster_cooldown_sec >= 10
