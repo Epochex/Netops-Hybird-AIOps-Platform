@@ -322,7 +322,7 @@ Input 字段分析
 
 核心侧（`netops-node1 / r450`）定位为 **Data Plane + Core Analytics** 承载节点，负责接收边缘侧 `edge/fortigate-ingest` 输出的结构化事实事件流，并在此基础上完成事件解耦、基础聚合、关联分析、告警簇生成与后续智能增强推理（LLM/Agent）的执行入口。当前架构目标先建立 **可稳定运行、可观测、可扩展** 的最小闭环：`ingest output -> broker/queue -> consumer/correlator -> alert context -> (optional) LLM inference queue`。
 
-### 3.1 当前阶段的核心侧建设目标（可直接写入 README）
+### 3.1 当前阶段的核心侧建设目标
 - **数据平面接入**：承接 `r230` 输出的事实事件流，建立稳定的传输与消费入口（解耦边缘生产与核心消费）。
 - **最小流式消费链路**：实现基础 consumer / correlator，对事件进行窗口聚合、规则触发、告警上下文构建。
 - **最小 AIOps 增强已落地**：已具备告警簇级建议生成、近似上下文查询、建议 Topic/JSONL 输出能力。
@@ -333,7 +333,7 @@ Input 字段分析
 项目早期曾尝试过 **字节系 Flink 相关方案**（已做过验证），但结合当前环境约束（`k3s`、单核心节点 `r450`、内存有限、无 GPU、优先追求快速闭环与低运维成本），结论为：**现阶段不适合作为核心侧主线**。主要原因是其对运行时资源、组件编排与运维复杂度要求较高，与当前阶段“先打通数据面与最小分析闭环”的目标不匹配。后续仅在事件规模、状态计算复杂度与吞吐要求显著提升时，再评估引入 Flink 类框架的必要性。
 
 ### 3.3 Core 核心侧技术栈与部署方案（当前主线）
-核心侧（`netops-node1 / r450`）采用 **Kafka（KRaft, 单节点）+ Python Consumer/Correlator +（可选）LLM 推理服务** 的技术栈，并运行于 `k3s`。当前阶段目标为优先打通 `r230 -> r450` 数据平面与最小关联分析闭环，在资源受限条件下保持部署复杂度可控、链路可观测、后续扩展路径清晰。
+核心侧（`netops-node1 / r450`）采用 **Kafka（KRaft, 单节点）+ Python Consumer/Correlator +（Pending）LLM 推理服务** 的技术栈，并运行于 `k3s`。当前阶段目标为优先打通 `r230 -> r450` 数据平面与最小关联分析闭环，在资源受限条件下保持部署复杂度可控、链路可观测、后续扩展路径清晰。
 
 **技术栈（当前阶段）**
 - **Core Broker**：`Apache Kafka (KRaft mode, single-node)`（事件接入、生产消费解耦、Topic/Consumer Group 扩展）
