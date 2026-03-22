@@ -44,6 +44,9 @@ KV_SUBSET_KEYS = [
 
     # 管理/认证类（system event）
     "user", "status", "reason", "msg", "logdesc", "ui", "method",
+
+    # 风险/变更线索
+    "crscore", "craction", "crlevel",
 ]
 
 def _has_binary_garbage(s: str) -> bool:
@@ -196,6 +199,31 @@ def _device_key(kv: Dict[str, str]) -> Optional[str]:
             return v
     return None
 
+
+def _device_profile(kv: Dict[str, str]) -> Optional[Dict[str, str]]:
+    profile: Dict[str, str] = {}
+    for src_key, out_key in [
+        ("srcname", "srcname"),
+        ("srcmac", "srcmac"),
+        ("osname", "osname"),
+        ("devtype", "devtype"),
+        ("srcfamily", "srcfamily"),
+        ("srchwvendor", "srchwvendor"),
+        ("srchwmodel", "srchwmodel"),
+        ("srchwversion", "srchwversion"),
+    ]:
+        value = kv.get(src_key)
+        if value:
+            profile[out_key] = value
+
+    if not profile:
+        return None
+
+    device_key = _device_key(kv)
+    if device_key:
+        profile["src_device_key"] = device_key
+    return profile
+
 def parse_fortigate_line(raw_line: str, now_year: int) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
     """
     Return (event, dlq). One of them is None.
@@ -287,6 +315,9 @@ def parse_fortigate_line(raw_line: str, now_year: int) -> Tuple[Optional[Dict[st
     event["logid"] = kv.get("logid")
     event["eventtime"] = kv.get("eventtime")  # 先保留字符串，避免溢出/误解析
     event["tz"] = kv.get("tz")
+    event["crscore"] = _to_int(kv.get("crscore"))
+    event["craction"] = _to_int(kv.get("craction"))
+    event["crlevel"] = kv.get("crlevel")
 
     # system event（管理登录/审计）
     event["logdesc"] = kv.get("logdesc")
@@ -324,6 +355,7 @@ def parse_fortigate_line(raw_line: str, now_year: int) -> Tuple[Optional[Dict[st
 
     # 新增：稳定设备 key（R450 聚合主键）
     event["src_device_key"] = _device_key(kv)
+    event["device_profile"] = _device_profile(kv)
 
     # 保留一份 KV 子集（未来扩展/回溯分析）
     event["kv_subset"] = _pick_kv_subset(kv)
