@@ -45,9 +45,9 @@ spec:
             - name: FORWARDER_MAX_BATCH_LINES
               value: "1000"
             - name: FORWARDER_FILTER_DROP_LOCAL_DENY
-              value: "true"
+              value: "false"
             - name: FORWARDER_FILTER_DROP_BROADCAST_MDNS_NBNS
-              value: "true"
+              value: "false"
           volumeMounts:
             - name: fortigate-runtime
               mountPath: /data/fortigate-runtime
