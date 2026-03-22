@@ -1,7 +1,12 @@
 from core.aiops_agent.cluster_aggregator import ClusterKey, ClusterTrigger
 from core.aiops_agent.context_lookup import recent_similar_count
+from core.aiops_agent.evidence_bundle import build_cluster_evidence_bundle
+from core.aiops_agent.inference_queue import InMemoryInferenceQueue
+from core.aiops_agent.inference_schema import build_cluster_inference_request
+from core.aiops_agent.inference_worker import InferenceWorker
+from core.aiops_agent.providers import TemplateProvider
 from core.aiops_agent.service import commit_if_needed
-from core.aiops_agent.suggestion_engine import build_cluster_suggestion, build_suggestion
+from core.aiops_agent.suggestion_engine import build_cluster_suggestion, build_pipeline_suggestion, build_suggestion
 
 
 class _Result:
@@ -79,6 +84,71 @@ def test_build_cluster_suggestion_contains_cluster_context() -> None:
     assert s["context"]["service"] == "udp/3702"
     assert s["context"]["recent_similar_1h"] == 30
     assert s["confidence"] >= 0.7
+
+
+def test_evidence_bundle_and_inference_request_capture_pipeline_context() -> None:
+    alert = {
+        "alert_id": "a-42",
+        "rule_id": "deny_burst_v1",
+        "severity": "warning",
+        "metrics": {"deny_count": 12},
+        "dimensions": {"src_device_key": "dev-1"},
+        "event_excerpt": {
+            "service": "udp/3702",
+            "srcip": "192.168.1.10",
+            "dstip": "239.255.255.250",
+            "src_device_key": "dev-1",
+        },
+        "topology_context": {"site": "lab-a", "zone": "edge"},
+        "device_profile": {"device_role": "camera", "vendor": "hikvision", "asset_tags": ["iot", "lab"]},
+        "change_context": {"suspected_change": True, "change_window_min": 30, "change_refs": ["chg-1"]},
+    }
+    trigger = ClusterTrigger(
+        key=ClusterKey(rule_id="deny_burst_v1", severity="warning", service="udp/3702", src_device_key="dev-1"),
+        cluster_size=4,
+        first_alert_ts="2026-03-09T00:00:00+00:00",
+        last_alert_ts="2026-03-09T00:00:59+00:00",
+        window_sec=300,
+        sample_alert_ids=["a-1", "a-2", "a-3", "a-4"],
+    )
+    evidence = build_cluster_evidence_bundle(alert, trigger, recent_similar_1h=18)
+    req = build_cluster_inference_request(alert, trigger, evidence, provider="template")
+    assert evidence["topology_context"]["site"] == "lab-a"
+    assert evidence["historical_context"]["recent_similar_1h"] == 18
+    assert evidence["device_context"]["device_role"] == "camera"
+    assert evidence["change_context"]["suspected_change"] is True
+    assert req.request_kind == "cluster_triage"
+    assert req.evidence_bundle["bundle_scope"] == "cluster"
+    assert req.expected_response_schema["confidence_label"] == "low|medium|high"
+
+
+def test_template_provider_worker_pipeline_builds_structured_suggestion() -> None:
+    alert = {
+        "alert_id": "a-77",
+        "event_excerpt": {
+            "service": "udp/3702",
+            "src_device_key": "dev-1",
+        },
+    }
+    trigger = ClusterTrigger(
+        key=ClusterKey(rule_id="deny_burst_v1", severity="warning", service="udp/3702", src_device_key="dev-1"),
+        cluster_size=5,
+        first_alert_ts="2026-03-09T00:00:00+00:00",
+        last_alert_ts="2026-03-09T00:00:59+00:00",
+        window_sec=300,
+        sample_alert_ids=["a-1", "a-2", "a-3", "a-4", "a-5"],
+    )
+    evidence = build_cluster_evidence_bundle(alert, trigger, recent_similar_1h=25)
+    req = build_cluster_inference_request(alert, trigger, evidence, provider="template")
+    queue = InMemoryInferenceQueue()
+    queue.enqueue(req)
+    result = InferenceWorker(TemplateProvider()).run_once(queue)
+    assert result is not None
+    suggestion = build_pipeline_suggestion(alert, trigger, evidence, req, result)
+    assert suggestion["schema_version"] == 2
+    assert suggestion["context"]["recent_similar_1h"] == 25
+    assert suggestion["inference"]["provider_name"] == "template"
+    assert suggestion["confidence"] >= 0.75
 
 
 def test_commit_if_needed_success_and_failure_paths() -> None:

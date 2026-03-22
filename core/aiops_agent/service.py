@@ -6,8 +6,13 @@ from typing import Any
 from core.aiops_agent.app_config import AgentConfig
 from core.aiops_agent.cluster_aggregator import AlertClusterAggregator
 from core.aiops_agent.context_lookup import recent_similar_count
+from core.aiops_agent.evidence_bundle import build_cluster_evidence_bundle
+from core.aiops_agent.inference_queue import InMemoryInferenceQueue
+from core.aiops_agent.inference_schema import build_cluster_inference_request
+from core.aiops_agent.inference_worker import InferenceWorker
 from core.aiops_agent.output_sink import append_jsonl_line, hourly_file_path
-from core.aiops_agent.suggestion_engine import build_cluster_suggestion
+from core.aiops_agent.providers import build_provider
+from core.aiops_agent.suggestion_engine import build_pipeline_suggestion
 
 LOGGER = logging.getLogger(__name__)
 
@@ -28,6 +33,9 @@ def run_agent_loop(config: AgentConfig, consumer: Any, producer: Any, clickhouse
         "suggestions_emitted": 0,
         "skipped_by_severity": 0,
         "json_error": 0,
+        "inference_requests": 0,
+        "inference_completed": 0,
+        "inference_error": 0,
         "publish_error": 0,
         "sink_error": 0,
         "commit_error": 0,
@@ -38,9 +46,15 @@ def run_agent_loop(config: AgentConfig, consumer: Any, producer: Any, clickhouse
         min_alerts=config.cluster_min_alerts,
         cooldown_sec=config.cluster_cooldown_sec,
     )
+    provider = build_provider(config)
+    queue = InMemoryInferenceQueue()
+    worker = InferenceWorker(provider)
 
     LOGGER.info(
-        "aiops-agent started: topic_alerts=%s topic_suggestions=%s min_severity=%s cluster=[window=%ds,min=%d,cooldown=%ds] clickhouse_enabled=%s",
+        (
+            "aiops-agent started: topic_alerts=%s topic_suggestions=%s min_severity=%s "
+            "cluster=[window=%ds,min=%d,cooldown=%ds] clickhouse_enabled=%s provider=%s"
+        ),
         config.topic_alerts,
         config.topic_suggestions,
         config.min_severity,
@@ -48,6 +62,7 @@ def run_agent_loop(config: AgentConfig, consumer: Any, producer: Any, clickhouse
         config.cluster_min_alerts,
         config.cluster_cooldown_sec,
         config.clickhouse_enabled,
+        provider.name,
     )
 
     for msg in consumer:
@@ -82,7 +97,26 @@ def run_agent_loop(config: AgentConfig, consumer: Any, producer: Any, clickhouse
             trigger.key.rule_id,
             trigger.key.service,
         )
-        suggestion = build_cluster_suggestion(alert, trigger, similar_1h)
+        evidence_bundle = build_cluster_evidence_bundle(alert, trigger, similar_1h)
+        inference_request = build_cluster_inference_request(alert, trigger, evidence_bundle, provider.name)
+        queue.enqueue(inference_request)
+        stats["inference_requests"] += 1
+
+        try:
+            inference_result = worker.run_once(queue)
+        except Exception:
+            stats["inference_error"] += 1
+            LOGGER.exception("aiops inference failed")
+            commit_if_needed(consumer, should_commit, stats)
+            continue
+
+        if inference_result is None:
+            stats["inference_error"] += 1
+            commit_if_needed(consumer, should_commit, stats)
+            continue
+
+        stats["inference_completed"] += 1
+        suggestion = build_pipeline_suggestion(alert, trigger, evidence_bundle, inference_request, inference_result)
         payload = json.dumps(suggestion, ensure_ascii=True, separators=(",", ":"))
 
         if _publish_suggestion(producer, config.topic_suggestions, payload, suggestion["suggestion_id"], stats):

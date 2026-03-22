@@ -41,7 +41,7 @@ The project construction sequence is expected to proceed in the following stages
 > At the current stage, this project does not take “per-event LLM judgment over the full event stream” as an architectural target.  
 > The main path is handled by deterministic streaming modules for real-time detection and basic correlation; LLM/Agent components are used for on-demand augmented analysis of high-value alert clusters and remediation recommendation generation.
 
-## Current Progress Snapshot (2026-03-18)
+## Current Progress Snapshot (2026-03-22)
 
 > [!TIP]
 > Runtime ownership is now explicit: `edge/*` only for edge node components, `core/*` only for core node components.
@@ -69,7 +69,7 @@ flowchart LR
 | Core correlator | `core/correlator` | Quality gate, rule matching, alert emit, manual offset commit | Python, Kafka |
 | Alert persistence | `core/alerts_sink` | Persist alerts to hourly JSONL | Python |
 | Hot analytics store | `core/alerts_store` | Consume alerts and store structured records | ClickHouse, `clickhouse-connect` |
-| AIOps assistant (minimal) | `core/aiops_agent` | Aggregate high-value alert clusters, enrich with ClickHouse recent-similar context, and emit suggestion payloads/audit JSONL | Python, Kafka, ClickHouse |
+| AIOps assistant (minimal) | `core/aiops_agent` | Build evidence bundles, inference requests, queue/worker/provider pipeline, and emit suggestion payloads/audit JSONL | Python, Kafka, ClickHouse |
 | Ops tooling | `core/benchmark/*` | Runtime watch and warning-noise observation | Python, `kubectl` |
 
 > [!NOTE]
@@ -85,6 +85,11 @@ flowchart TD
   M --> SVC[service]
   SVC --> CL[cluster_aggregator]
   SVC --> CTX[context_lookup]
+  SVC --> EB[evidence_bundle]
+  SVC --> IS[inference_schema]
+  SVC --> IQ[inference_queue]
+  SVC --> IW[inference_worker]
+  SVC --> PR[providers]
   SVC --> ENG[suggestion_engine]
   SVC --> OUT[output_sink]
 ```
@@ -92,9 +97,13 @@ flowchart TD
 - `app_config`: normalize env config and enforce severity gate policy.
 - `runtime_io`: initialize Kafka/ClickHouse clients in one place.
 - `cluster_aggregator`: aggregate alerts by `rule_id + severity + service + src_device_key` in a sliding window.
-- `service`: consume alerts, apply severity gate, trigger cluster suggestions, and commit offsets only on successful handling.
+- `evidence_bundle`: assemble alert, rule, history, and change/topology placeholders into a single evidence object.
+- `inference_schema`: define provider-facing request/result schema and confidence fields.
+- `inference_queue` / `inference_worker`: keep the slow path explicit even when currently running synchronously.
+- `providers`: abstract built-in template inference from future external/local model providers.
+- `service`: consume alerts, apply severity gate, build evidence/request, invoke the provider pipeline, and commit offsets only on successful handling.
 - `context_lookup`: query recent-similar counts from ClickHouse for context enrichment.
-- `suggestion_engine`: generate stable suggestion payload schema.
+- `suggestion_engine`: map provider output and evidence back into a stable suggestion payload schema.
 - `output_sink`: persist hourly JSONL evidence for audit/replay.
 
 ### Reliability Hardening Already Applied
@@ -114,7 +123,26 @@ bash -n core/automatic_scripts/release_core_app.sh
 
 > [!NOTE]
 > `tests/core` now covers `rules`, `quality_gate`, `alerts_sink`, `alerts_store`, and `aiops_agent` (including cluster aggregation) minimal behavior.
-> Latest local verification on the repository baseline passed `22` core tests, and the current baseline is suitable for iterative AIOps feature development on top of the existing core pipeline.
+> Latest local verification on the repository baseline passed `24` core tests, and the current baseline is suitable for iterative AIOps feature development on top of the existing core pipeline.
+
+### Replay Validation On Real Alert History (2026-03-22)
+
+The AIOps slow path was replay-validated against the real alert history already present on the core node:
+
+- input: `/data/netops-runtime/alerts/*.jsonl`
+- span: `337` hourly files, `44,733` alerts, from `2026-03-04T15:09:11+00:00` to `2026-03-18T22:59:52+00:00`
+- tool: `python3 -m core.benchmark.aiops_replay_validation`
+
+Key findings:
+
+- With the old default `AIOPS_CLUSTER_WINDOW_SEC=300`, replay produced `0` cluster triggers. This proved the previous default did not match the real alert cadence.
+- Gap analysis on the same alert history showed a per-key inter-alert median around `300-303s`, so the cluster window default was raised to `600s` in the repository and deployment manifest.
+- Replaying with `600s / min_alerts=3 / cooldown=300s` produced `12,751` AIOps pipeline outputs from the same `44,733` alerts.
+- Template provider stability rate was `1.0` on replay (no semantic drift across repeated inference on the same request).
+- Evidence presence was strong for fields already carried by the alert stream: `service=1.0`, `src_device_key=1.0`, `srcip=1.0`, `dstip=1.0`, `recent_similar_nonzero=1.0`.
+- Evidence presence was `0.0` for `site`, `device_profile`, and `change_context`, which means the current upstream/core schema still lacks those contexts and the new evidence bundle is only partially populated in production-shaped replay.
+- Confidence output was stable but not yet discriminative: replay outputs were all `medium`, so current confidence should be treated as a stable heuristic rather than calibrated RCA confidence.
+- No external HTTP provider was counted in this validation because no real endpoint was configured; no mock-based claim is recorded.
 
 ## 1.1 Project Positioning and Current Architecture Boundary
 The current project architecture is centered around **r230 (edge collection) → r450 (core data plane and analytics processing)**, i.e., near-source collection and factization on the edge side, and subsequent streaming processing, correlation analysis, evidence-chain attribution, and automated remediation capability implementation on the core side. This means the project has completed the most critical input-plane landing work in platform construction and has entered the architecture advancement stage oriented toward core capability expansion.
@@ -333,7 +361,7 @@ The core side (`netops-node1 / r450`) is positioned as the **Data Plane + Core A
 ### 3.1 Core-Side Objectives at the Current Stage (README-ready)
 - **Data plane ingress**: receive the fact event stream output from `r230` and establish a stable transport/consumption entry point (decoupling edge production from core consumption).
 - **Minimal streaming consumption pipeline**: implement a basic consumer/correlator for window aggregation, rule triggering, and alert context construction.
-- **Minimal AIOps augmentation already landed**: cluster-level suggestion generation, recent-similar context lookup, and suggestion-topic / JSONL output are already connected on top of the alert stream.
+- **Minimal AIOps augmentation already landed**: cluster-level suggestion generation, evidence bundle construction, recent-similar context lookup, and suggestion-topic / JSONL output are already connected on top of the alert stream.
 - **Reserved intelligent augmentation entry**: keep an `LLM inference queue` and rate-limiting mechanism on the core side for future alert-level inference (explanation / root-cause assistance / Runbook draft generation), without blocking the main pipeline.
 - **Clear layering boundary**: real-time detection and basic correlation are handled by deterministic streaming modules; LLM/Agent only processes high-value alert clusters and does not participate in per-event full-stream classification.
 
@@ -346,7 +374,7 @@ The core side (`netops-node1 / r450`) adopts **Kafka (KRaft, single-node) + Pyth
 **Technology Stack (Current Stage)**
 - **Core Broker**: `Apache Kafka (KRaft mode, single-node)` (event ingress, producer-consumer decoupling, Topic/Consumer Group extensibility)
 - **Core Consumer / Correlator**: `Python 3.11 + Kafka Client + window aggregation / rule-correlation modules` (event consumption, aggregation, anomaly cluster construction, alert context generation)
-- **Minimal AIOps Loop (implemented)**: `Alert cluster aggregator + ClickHouse context lookup + suggestion topic/jsonl sink` (deterministic, low-cost augmentation for high-value alert clusters)
+- **Minimal AIOps Loop (implemented)**: `Alert cluster aggregator + evidence bundle + provider request/result schema + suggestion topic/jsonl sink` (deterministic, low-cost augmentation for high-value alert clusters)
 - **Inference Entry (next stage)**: `Inference Queue + resident inference service (rate-limited)` (for explanation / root-cause assistance / Runbook draft generation on high-value alert clusters)
 
 ### 3.4 Phase-2 / Minimal AIOps Current Implementation (Repository State)
