@@ -144,6 +144,25 @@ Key findings:
 - Confidence output was stable but not yet discriminative: replay outputs were all `medium`, so current confidence should be treated as a stable heuristic rather than calibrated RCA confidence.
 - No external HTTP provider was counted in this validation because no real endpoint was configured; no mock-based claim is recorded.
 
+### Core Investigation Note (2026-03-22)
+
+Core-side investigation showed that the apparent mismatch between:
+- `alerts/*.jsonl` stopping at filenames such as `alerts-20260318-*`
+- `aiops/*.jsonl` continuing with filenames such as `suggestions-20260322-*`
+
+does not by itself indicate an `alerts-sink` failure.
+
+Observed facts:
+- `core-correlator`, `core-alerts-sink`, `core-alerts-store`, and `core-aiops-agent` pods were all running on `r450`.
+- Kafka lag for `core-alerts-sink-v1`, `core-aiops-agent-v1`, `core-alerts-store-v1`, and `core-correlator-v2` was `0` during investigation.
+- `core-alerts-sink` continues writing successfully, but buckets files by `alert.alert_ts`.
+- `core-aiops-agent` buckets suggestion files by current processing time.
+
+Interpretation:
+- The current core path is consistent with replay/backfill semantics.
+- If current processing time is March 22 but the alert payload timestamp is still March 18, then `alerts-sink` will keep appending to `alerts-20260318-*` while `aiops-agent` writes to `suggestions-20260322-*`.
+- The remaining upstream question is therefore not “did alerts-sink stop?” but “why is the source stream still carrying March 18-era event timestamps on March 22?”
+
 ## 1.1 Project Positioning and Current Architecture Boundary
 The current project architecture is centered around **r230 (edge collection) → r450 (core data plane and analytics processing)**, i.e., near-source collection and factization on the edge side, and subsequent streaming processing, correlation analysis, evidence-chain attribution, and automated remediation capability implementation on the core side. This means the project has completed the most critical input-plane landing work in platform construction and has entered the architecture advancement stage oriented toward core capability expansion.
 

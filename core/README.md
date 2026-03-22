@@ -126,6 +126,24 @@ python -m core.benchmark.pipeline_watch \
   --summary-json /data/netops-runtime/observability/pipeline-watch-8h-summary.json
 ```
 
+### 5) Runtime timestamp audit
+
+Use this when `alerts/*.jsonl` and `aiops/*.jsonl` appear to have inconsistent dates:
+
+```bash
+python -m core.benchmark.runtime_timestamp_audit \
+  --alerts-dir /data/netops-runtime/alerts \
+  --aiops-dir /data/netops-runtime/aiops
+```
+
+This compares:
+- alert file mtime vs payload `alert_ts`
+- suggestion file mtime vs payload `suggestion_ts`
+
+The purpose is to distinguish a true sink failure from a replay/backfill case where:
+- alert files are bucketed by historical `alert_ts`
+- aiops files are bucketed by current processing time
+
 ## Release Automation
 
 To avoid manual build/save/import/set-image steps for core deployments, use:

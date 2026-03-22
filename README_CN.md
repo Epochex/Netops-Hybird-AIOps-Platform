@@ -143,6 +143,26 @@ bash -n core/automatic_scripts/release_core_app.sh
 - confidence 输出目前是稳定的，但区分度不足：回放结果全部落在 `medium`，因此当前 confidence 只能被视为稳定启发式分数，不能视为已校准的 RCA 可信度。
 - 本轮没有把 HTTP provider 计入验证结果，因为当前环境没有配置真实外部 endpoint；没有使用 mock 数据来冒充有效验证。
 
+### Core 侧调查说明（2026-03-22）
+
+本轮对 core 的进一步调查表明，下面这个现象：
+
+- `alerts/*.jsonl` 的文件名仍停留在 `alerts-20260318-*`
+- `aiops/*.jsonl` 的文件名已经推进到 `suggestions-20260322-*`
+
+本身并不等价于 `alerts-sink` 故障。
+
+调查事实：
+- `core-correlator`、`core-alerts-sink`、`core-alerts-store`、`core-aiops-agent` 在 `r450` 上都处于运行态。
+- 调查时 `core-alerts-sink-v1`、`core-aiops-agent-v1`、`core-alerts-store-v1`、`core-correlator-v2` 的 Kafka lag 都为 `0`。
+- `core-alerts-sink` 落盘分桶依据是 `alert.alert_ts`。
+- `core-aiops-agent` 落盘分桶依据是当前处理时间。
+
+因此更合理的解释是：
+- 这更像 replay/backfill 语义差异，而不是 `alerts-sink` 停止工作。
+- 如果当前处理时间已经到 3 月 22 日，但 alert payload 里的 `alert_ts` 仍是 3 月 18 日，那么 `alerts-sink` 会继续写入 `alerts-20260318-*`，而 `aiops-agent` 会写入 `suggestions-20260322-*`。
+- 所以后续真正需要回答的 upstream 问题不是“alerts-sink 有没有停”，而是“为什么 3 月 22 日还在处理带有 3 月 18 日时间戳的源事件流”。
+
 
 <!-- 本项目旨在构建一个面向复杂网络运维场景的 **分布式 AIOps 平台（Towards NetOps）**，以 **边缘事实接入（Edge Fact Ingestion）→ 核心流式分析（Core Streaming Analytics）→ 智能增强决策（LLM-Augmented Reasoning）→ 处置闭环（Remediation Loop）** 为主线，逐步实现从异常发现、证据链归因到处置建议与执行控制的工程化能力演进。平台并不以“全量日志实时 LLM 推理”为目标，而是以稳定的数据面与可解释的证据流为基础，在核心侧对高价值异常簇进行按需智能增强分析，从而在成本、实时性与可运维性之间取得可落地平衡。
 
