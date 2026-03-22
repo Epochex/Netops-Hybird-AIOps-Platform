@@ -29,6 +29,13 @@ class _ClientOK:
         return _Result(23)
 
 
+class _ClientDict:
+    def query(self, _sql: str, parameters: dict) -> _Result:
+        assert parameters["rule_id"] == "deny_burst_v1"
+        assert parameters["service"] == "udp/3702"
+        return _Result({"count()": 17})
+
+
 class _ClientFail:
     def query(self, _sql: str, parameters: dict) -> _Result:
         raise RuntimeError("query failed")
@@ -112,6 +119,11 @@ def _config(output_dir: str, cluster_min_alerts: int = 3) -> AgentConfig:
 def test_recent_similar_returns_count_when_query_ok() -> None:
     count = recent_similar_count(_ClientOK(), "netops", "alerts", "deny_burst_v1", "udp/3702")
     assert count == 23
+
+
+def test_recent_similar_accepts_dict_like_first_item() -> None:
+    count = recent_similar_count(_ClientDict(), "netops", "alerts", "deny_burst_v1", "udp/3702")
+    assert count == 17
 
 
 def test_recent_similar_returns_zero_on_query_error() -> None:
