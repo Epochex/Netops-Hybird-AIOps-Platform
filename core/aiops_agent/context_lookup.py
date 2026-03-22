@@ -18,7 +18,10 @@ def recent_similar_count(client: Any, db: str, table: str, rule_id: str, service
             """,
             parameters={"rule_id": rule_id, "service": service},
         )
-        return int(result.first_item or 0)
+        value = getattr(result, "first_item", 0)
+        if isinstance(value, dict):
+            value = next(iter(value.values()), 0)
+        return int(value or 0)
     except Exception:
         LOGGER.exception("failed to query clickhouse context")
         return 0

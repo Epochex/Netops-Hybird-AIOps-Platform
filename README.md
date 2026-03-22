@@ -1,6 +1,8 @@
 ## Towards NetOps: Hybrid AIOps Platform for Network Awareness and Automated Remediation
 [![English](https://img.shields.io/badge/Language-English-1f6feb)](./README.md) [![简体中文](https://img.shields.io/badge/%E8%AF%AD%E8%A8%80-%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-2ea043)](./README_CN.md)
 
+Quick Links: [English](./README.md) | [简体中文](./README_CN.md) | [Project State](./documentation/PROJECT_STATE.md) | [Issues Log](./documentation/ISSUES_LOG.md) | [Controlled Validation 2026-03-22](./documentation/CONTROLLED_VALIDATION_20260322.md)
+
 > Hybrid AIOps Platform: Deterministic Streaming Core + CPU Local LLM (On-Demand) + Multi-Agent Orchestration
 
 #### Project Overview
@@ -12,7 +14,7 @@ This project aims to build a **distributed AIOps platform (Towards NetOps)** for
 The system adopts a layered architecture of **Edge Ingestion + Core Analytics**. The edge side is responsible for near-source log collection, structured fact eventization, audit trail retention, and replayable persistence, converting raw device logs into a sustainably consumable fact event stream; the core side is responsible for streaming data plane hosting, event aggregation and correlation analysis, and evidence-chain construction, and on this basis introduces an **LLM-augmented analytics layer** for alert explanation, situation summarization, attribution assistance, and Runbook draft generation. This augmentation layer adopts a **resident service + rate-limited queue** operating mode: rule-based/streaming modules perform real-time detection and high-value anomaly filtering, while the LLM performs low-concurrency, on-demand inference only on alert-level context, avoiding contention with the real-time performance and system resources of the main path.
 
 > [!IMPORTANT]
-> The platform target is not “real-time LLM inference on full-volume logs,” but on-demand intelligent augmented analysis of high-value anomaly clusters based on a stable data plane and explainable evidence flow.
+> The platform target is not “real-time LLM inference on full-volume logs,” but on-demand intelligent augmented analysis of eligible alerts and repeated alert clusters based on a stable data plane and explainable evidence flow.
 
 - Current Technical Route Under Resource Constraints
 
@@ -39,9 +41,9 @@ The project construction sequence is expected to proceed in the following stages
 
 > [!WARNING]
 > At the current stage, this project does not take “per-event LLM judgment over the full event stream” as an architectural target.  
-> The main path is handled by deterministic streaming modules for real-time detection and basic correlation; LLM/Agent components are used for on-demand augmented analysis of high-value alert clusters and remediation recommendation generation.
+> The main path is handled by deterministic streaming modules for real-time detection and basic correlation; LLM/Agent components are used for on-demand augmented analysis of eligible alerts, repeated clusters, and remediation recommendation generation.
 
-## Current Progress Snapshot (2026-03-18)
+## Current Progress Snapshot (2026-03-22)
 
 > [!TIP]
 > Runtime ownership is now explicit: `edge/*` only for edge node components, `core/*` only for core node components.
@@ -69,11 +71,11 @@ flowchart LR
 | Core correlator | `core/correlator` | Quality gate, rule matching, alert emit, manual offset commit | Python, Kafka |
 | Alert persistence | `core/alerts_sink` | Persist alerts to hourly JSONL | Python |
 | Hot analytics store | `core/alerts_store` | Consume alerts and store structured records | ClickHouse, `clickhouse-connect` |
-| AIOps assistant (minimal) | `core/aiops_agent` | Aggregate high-value alert clusters, enrich with ClickHouse recent-similar context, and emit suggestion payloads/audit JSONL | Python, Kafka, ClickHouse |
+| AIOps assistant (minimal) | `core/aiops_agent` | Build alert-scope and cluster-scope evidence/request pipelines, emit structured suggestions, and persist audit JSONL | Python, Kafka, ClickHouse |
 | Ops tooling | `core/benchmark/*` | Runtime watch and warning-noise observation | Python, `kubectl` |
 
 > [!NOTE]
-> The current repository state is best described as: **Phase-2 core data plane closed loop is in place, and a minimal AIOps cluster-suggestion loop has landed on top of it**.  
+> The current repository state is best described as: **Phase-2 core data plane closed loop is in place, and a minimal AIOps alert + cluster suggestion loop has landed on top of it**.  
 > Deterministic streaming detection and alert persistence are already implemented; true LLM inference, causal evidence-chain reasoning, and remediation execution control remain the next-stage work.
 
 ### AIOps Agent Module Diagram
@@ -85,6 +87,11 @@ flowchart TD
   M --> SVC[service]
   SVC --> CL[cluster_aggregator]
   SVC --> CTX[context_lookup]
+  SVC --> EB[evidence_bundle]
+  SVC --> IS[inference_schema]
+  SVC --> IQ[inference_queue]
+  SVC --> IW[inference_worker]
+  SVC --> PR[providers]
   SVC --> ENG[suggestion_engine]
   SVC --> OUT[output_sink]
 ```
@@ -92,9 +99,13 @@ flowchart TD
 - `app_config`: normalize env config and enforce severity gate policy.
 - `runtime_io`: initialize Kafka/ClickHouse clients in one place.
 - `cluster_aggregator`: aggregate alerts by `rule_id + severity + service + src_device_key` in a sliding window.
-- `service`: consume alerts, apply severity gate, trigger cluster suggestions, and commit offsets only on successful handling.
+- `evidence_bundle`: assemble alert-scope and cluster-scope evidence bundles from alert, rule, history, change, and topology context.
+- `inference_schema`: define provider-facing request/result schema for both `alert_triage` and `cluster_triage`.
+- `inference_queue` / `inference_worker`: keep the slow path explicit even when currently running synchronously.
+- `providers`: abstract built-in template inference from future external/local model providers.
+- `service`: consume alerts, emit one alert-scope suggestion for each eligible alert, emit an extra cluster-scope suggestion when aggregation triggers, and commit offsets only after successful handling.
 - `context_lookup`: query recent-similar counts from ClickHouse for context enrichment.
-- `suggestion_engine`: generate stable suggestion payload schema.
+- `suggestion_engine`: map provider output and evidence back into a stable suggestion payload schema.
 - `output_sink`: persist hourly JSONL evidence for audit/replay.
 
 ### Reliability Hardening Already Applied
@@ -103,6 +114,7 @@ flowchart TD
 - Post-release validation was added to verify module importability in running pods (to catch image/content mismatch early).
 - Core consumers moved to `enable_auto_commit=False` and commit offsets after successful processing.
 - Rule thresholds are profile-based (`core/correlator/rule_profile.py`) for environment-specific tuning.
+- ClickHouse context lookup now accepts dict-like `first_item` payloads from the running client, avoiding false-negative context errors during suggestion generation.
 
 ### Baseline Verification (before merge/release)
 
@@ -113,8 +125,81 @@ bash -n core/automatic_scripts/release_core_app.sh
 ```
 
 > [!NOTE]
-> `tests/core` now covers `rules`, `quality_gate`, `alerts_sink`, `alerts_store`, and `aiops_agent` (including cluster aggregation) minimal behavior.
-> Latest local verification on the repository baseline passed `22` core tests, and the current baseline is suitable for iterative AIOps feature development on top of the existing core pipeline.
+> `tests/core` now covers `rules`, `quality_gate`, `alerts_sink`, `alerts_store`, and `aiops_agent` (including alert-scope + cluster-scope suggestion paths).
+> Latest local verification on the repository baseline passed `31` core tests, and the current baseline is suitable for iterative AIOps feature development on top of the existing core pipeline.
+
+### Realtime Validation After The Dual-Path AIOps Update (2026-03-22)
+
+The current core runtime was updated to:
+
+- `netops-core-app:v20260322-aiopsdualfix-3a76ec4`
+
+This release added:
+
+- alert-scope suggestion emission for every eligible alert
+- the existing cluster-scope path as an additional output when aggregation triggers
+- hardened ClickHouse `recent_similar_count()` handling for dict-like `first_item` values
+
+Realtime validation used real FortiGate traffic and a short controlled threshold window on `core-correlator`:
+
+- temporary validation window:
+  - `RULE_DENY_THRESHOLD=5`
+  - `RULE_ALERT_COOLDOWN_SEC=60`
+- restored after validation:
+  - `RULE_DENY_THRESHOLD=200`
+  - `RULE_ALERT_COOLDOWN_SEC=300`
+
+Observed facts:
+
+- `raw` remained realtime during validation (`latest_raw_payload_age_sec=4` in the final live check).
+- `alerts` remained in the current time window (`latest_alert_event_age_sec=35` in the final live check).
+- `suggestions` caught up to current time and were no longer stuck in the historical 19:39 UTC window.
+- the latest realtime suggestions carried `suggestion_scope="alert"` with current alert references, for example:
+  - `2026-03-22T21:55:17.943944+00:00`, service=`Dahua SDK`, src_device_key=`d4:43:0e:1a:c5:88`
+  - `2026-03-22T21:55:28.139648+00:00`, service=`udp/48689`, src_device_key=`78:66:9d:a3:4f:51`
+- `kubectl logs -n netops-core deploy/core-aiops-agent --since=3m` showed current suggestion emission without the old ClickHouse `TypeError`.
+
+Honest runtime note:
+
+- `cluster` suggestions were preserved in code/tests and historical replay behavior, but were not naturally re-observed in this short realtime validation window because the live alert stream did not form a same-key `min=3 within 600s` cluster during the test period.
+
+### Replay Validation On Real Alert History (2026-03-22)
+
+The AIOps slow path was replay-validated against the real alert history already present on the core node:
+
+- input: `/data/netops-runtime/alerts/*.jsonl`
+- span: `337` hourly files, `44,733` alerts, from `2026-03-04T15:09:11+00:00` to `2026-03-18T22:59:52+00:00`
+- tool: `python3 -m core.benchmark.aiops_replay_validation`
+
+Key findings:
+
+- With the old default `AIOPS_CLUSTER_WINDOW_SEC=300`, replay produced `0` cluster triggers. This proved the previous default did not match the real alert cadence.
+- Gap analysis on the same alert history showed a per-key inter-alert median around `300-303s`, so the cluster window default was raised to `600s` in the repository and deployment manifest.
+- Replaying with `600s / min_alerts=3 / cooldown=300s` produced `12,751` AIOps pipeline outputs from the same `44,733` alerts.
+- Template provider stability rate was `1.0` on replay (no semantic drift across repeated inference on the same request).
+- Evidence presence was strong for fields already carried by the alert stream: `service=1.0`, `src_device_key=1.0`, `srcip=1.0`, `dstip=1.0`, `recent_similar_nonzero=1.0`.
+- Evidence presence was `0.0` for `site`, `device_profile`, and `change_context`, which means the current upstream/core schema still lacks those contexts and the new evidence bundle is only partially populated in production-shaped replay.
+- Confidence output was stable but not yet discriminative: replay outputs were all `medium`, so current confidence should be treated as a stable heuristic rather than calibrated RCA confidence.
+- No external HTTP provider was counted in this validation because no real endpoint was configured; no mock-based claim is recorded.
+
+### Core Investigation Note (2026-03-22)
+
+Core-side investigation showed that the apparent mismatch between:
+- `alerts/*.jsonl` stopping at filenames such as `alerts-20260318-*`
+- `aiops/*.jsonl` continuing with filenames such as `suggestions-20260322-*`
+
+does not by itself indicate an `alerts-sink` failure.
+
+Observed facts:
+- `core-correlator`, `core-alerts-sink`, `core-alerts-store`, and `core-aiops-agent` pods were all running on `r450`.
+- Kafka lag for `core-alerts-sink-v1`, `core-aiops-agent-v1`, `core-alerts-store-v1`, and `core-correlator-v2` was `0` during investigation.
+- `core-alerts-sink` continues writing successfully, but buckets files by `alert.alert_ts`.
+- `core-aiops-agent` buckets suggestion files by current processing time.
+
+Interpretation:
+- The current core path is consistent with replay/backfill semantics.
+- If current processing time is March 22 but the alert payload timestamp is still March 18, then `alerts-sink` will keep appending to `alerts-20260318-*` while `aiops-agent` writes to `suggestions-20260322-*`.
+- The remaining upstream question is therefore not “did alerts-sink stop?” but “why is the source stream still carrying March 18-era event timestamps on March 22?”
 
 ## 1.1 Project Positioning and Current Architecture Boundary
 The current project architecture is centered around **r230 (edge collection) → r450 (core data plane and analytics processing)**, i.e., near-source collection and factization on the edge side, and subsequent streaming processing, correlation analysis, evidence-chain attribution, and automated remediation capability implementation on the core side. This means the project has completed the most critical input-plane landing work in platform construction and has entered the architecture advancement stage oriented toward core capability expansion.
@@ -333,7 +418,7 @@ The core side (`netops-node1 / r450`) is positioned as the **Data Plane + Core A
 ### 3.1 Core-Side Objectives at the Current Stage (README-ready)
 - **Data plane ingress**: receive the fact event stream output from `r230` and establish a stable transport/consumption entry point (decoupling edge production from core consumption).
 - **Minimal streaming consumption pipeline**: implement a basic consumer/correlator for window aggregation, rule triggering, and alert context construction.
-- **Minimal AIOps augmentation already landed**: cluster-level suggestion generation, recent-similar context lookup, and suggestion-topic / JSONL output are already connected on top of the alert stream.
+- **Minimal AIOps augmentation already landed**: cluster-level suggestion generation, evidence bundle construction, recent-similar context lookup, and suggestion-topic / JSONL output are already connected on top of the alert stream.
 - **Reserved intelligent augmentation entry**: keep an `LLM inference queue` and rate-limiting mechanism on the core side for future alert-level inference (explanation / root-cause assistance / Runbook draft generation), without blocking the main pipeline.
 - **Clear layering boundary**: real-time detection and basic correlation are handled by deterministic streaming modules; LLM/Agent only processes high-value alert clusters and does not participate in per-event full-stream classification.
 
@@ -346,7 +431,7 @@ The core side (`netops-node1 / r450`) adopts **Kafka (KRaft, single-node) + Pyth
 **Technology Stack (Current Stage)**
 - **Core Broker**: `Apache Kafka (KRaft mode, single-node)` (event ingress, producer-consumer decoupling, Topic/Consumer Group extensibility)
 - **Core Consumer / Correlator**: `Python 3.11 + Kafka Client + window aggregation / rule-correlation modules` (event consumption, aggregation, anomaly cluster construction, alert context generation)
-- **Minimal AIOps Loop (implemented)**: `Alert cluster aggregator + ClickHouse context lookup + suggestion topic/jsonl sink` (deterministic, low-cost augmentation for high-value alert clusters)
+- **Minimal AIOps Loop (implemented)**: `Alert cluster aggregator + evidence bundle + provider request/result schema + suggestion topic/jsonl sink` (deterministic, low-cost augmentation for high-value alert clusters)
 - **Inference Entry (next stage)**: `Inference Queue + resident inference service (rate-limited)` (for explanation / root-cause assistance / Runbook draft generation on high-value alert clusters)
 
 ### 3.4 Phase-2 / Minimal AIOps Current Implementation (Repository State)

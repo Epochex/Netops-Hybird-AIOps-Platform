@@ -166,4 +166,111 @@ def _make_alert(
             "service": event.get("service"),
             "src_device_key": event.get("src_device_key"),
         },
+        "topology_context": _build_topology_context(event),
+        "device_profile": _build_device_profile(event),
+        "change_context": _build_change_context(event),
     }
+
+
+def _build_topology_context(event: dict[str, Any]) -> dict[str, Any]:
+    base = event.get("topology_context")
+    topology = dict(base) if isinstance(base, dict) else {}
+
+    neighbor_refs = topology.get("neighbor_refs")
+    if not isinstance(neighbor_refs, list):
+        neighbor_refs = []
+
+    topology["service"] = str(topology.get("service") or event.get("service") or "")
+    topology["srcip"] = str(topology.get("srcip") or event.get("srcip") or "")
+    topology["dstip"] = str(topology.get("dstip") or event.get("dstip") or "")
+    topology["srcintf"] = str(topology.get("srcintf") or event.get("srcintf") or "")
+    topology["dstintf"] = str(topology.get("dstintf") or event.get("dstintf") or "")
+    topology["site"] = str(topology.get("site") or event.get("site") or "")
+    topology["zone"] = str(topology.get("zone") or event.get("srcintfrole") or event.get("dstintfrole") or "")
+    topology["neighbor_refs"] = [str(item).strip() for item in neighbor_refs if str(item).strip()]
+    return topology
+
+
+def _build_device_profile(event: dict[str, Any]) -> dict[str, Any]:
+    base = event.get("device_profile")
+    profile = dict(base) if isinstance(base, dict) else {}
+
+    asset_tags = _normalize_str_list(profile.get("asset_tags"))
+    if not asset_tags:
+        asset_tags = _normalize_str_list([event.get("devtype"), event.get("srcfamily")])
+
+    known_services = _normalize_str_list(profile.get("known_services"))
+    if not known_services and event.get("service"):
+        known_services = [str(event.get("service"))]
+
+    profile["src_device_key"] = str(profile.get("src_device_key") or event.get("src_device_key") or "")
+    profile["device_role"] = str(profile.get("device_role") or event.get("devtype") or "")
+    profile["site"] = str(profile.get("site") or event.get("site") or "")
+    profile["vendor"] = str(profile.get("vendor") or event.get("srchwvendor") or "")
+    profile["device_name"] = str(profile.get("device_name") or event.get("srcname") or "")
+    profile["osname"] = str(profile.get("osname") or event.get("osname") or "")
+    profile["family"] = str(profile.get("family") or event.get("srcfamily") or "")
+    profile["srcmac"] = str(profile.get("srcmac") or event.get("srcmac") or event.get("mastersrcmac") or "")
+    profile["model"] = str(profile.get("model") or event.get("srchwmodel") or "")
+    profile["version"] = str(profile.get("version") or event.get("srchwversion") or "")
+    profile["asset_tags"] = asset_tags
+    profile["known_services"] = known_services
+    return profile
+
+
+def _build_change_context(event: dict[str, Any]) -> dict[str, Any]:
+    base = event.get("change_context")
+    context = dict(base) if isinstance(base, dict) else {}
+
+    score = _to_int(event.get("crscore"))
+    action = str(event.get("craction") or "")
+    level = str(event.get("crlevel") or "")
+    change_refs = _normalize_str_list(context.get("change_refs"))
+    if not change_refs:
+        derived_refs: list[str] = []
+        if score is not None:
+            derived_refs.append(f"crscore:{score}")
+        if action:
+            derived_refs.append(f"craction:{action}")
+        if level:
+            derived_refs.append(f"crlevel:{level}")
+        change_refs = derived_refs
+
+    context["suspected_change"] = bool(context.get("suspected_change")) or score is not None or bool(action) or bool(level)
+    context["change_window_min"] = _to_int(context.get("change_window_min")) or 0
+    context["change_refs"] = change_refs
+    context["score"] = score
+    context["action"] = action
+    context["level"] = level
+    return context
+
+
+def _normalize_str_list(value: Any) -> list[str]:
+    if isinstance(value, list):
+        raw_items = value
+    else:
+        raw_items = []
+    items: list[str] = []
+    seen: set[str] = set()
+    for item in raw_items:
+        text = str(item).strip()
+        if text and text not in seen:
+            seen.add(text)
+            items.append(text)
+    return items
+
+
+def _to_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            return int(text)
+        except ValueError:
+            return None
+    return None

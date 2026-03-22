@@ -25,6 +25,11 @@ class AgentConfig:
     cluster_window_sec: int
     cluster_min_alerts: int
     cluster_cooldown_sec: int
+    provider: str
+    provider_endpoint_url: str
+    provider_api_key: str
+    provider_model: str
+    provider_timeout_sec: int
 
     @property
     def min_severity_rank(self) -> int:
@@ -59,7 +64,12 @@ def load_config() -> AgentConfig:
         clickhouse_password=env_str("CLICKHOUSE_PASSWORD", ""),
         clickhouse_db=env_str("CLICKHOUSE_DB", "netops"),
         clickhouse_alerts_table=env_str("CLICKHOUSE_ALERTS_TABLE", "alerts"),
-        cluster_window_sec=max(10, env_int("AIOPS_CLUSTER_WINDOW_SEC", 300)),
+        cluster_window_sec=max(10, env_int("AIOPS_CLUSTER_WINDOW_SEC", 600)),
         cluster_min_alerts=max(2, env_int("AIOPS_CLUSTER_MIN_ALERTS", 3)),
         cluster_cooldown_sec=max(10, env_int("AIOPS_CLUSTER_COOLDOWN_SEC", 300)),
+        provider=env_str("AIOPS_PROVIDER", "template"),
+        provider_endpoint_url=env_str("AIOPS_PROVIDER_ENDPOINT_URL", ""),
+        provider_api_key=env_str("AIOPS_PROVIDER_API_KEY", ""),
+        provider_model=env_str("AIOPS_PROVIDER_MODEL", "generic-aiops"),
+        provider_timeout_sec=max(5, env_int("AIOPS_PROVIDER_TIMEOUT_SEC", 30)),
     )

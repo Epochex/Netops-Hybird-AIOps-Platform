@@ -30,6 +30,11 @@ flowchart LR
   A --> D[service.py]
   D --> H[cluster_aggregator.py]
   D --> E[context_lookup.py]
+  D --> I[evidence_bundle.py]
+  D --> J[inference_schema.py]
+  D --> K[inference_queue.py]
+  D --> L[inference_worker.py]
+  D --> M[providers.py]
   D --> F[suggestion_engine.py]
   D --> G[output_sink.py]
 ```
@@ -40,15 +45,23 @@ flowchart LR
 | `core/aiops_agent/cluster_aggregator.py` | aggregate alerts by key in sliding window and trigger cluster suggestions | tuning window/min-count/cooldown, key strategy evolution |
 | `core/aiops_agent/runtime_io.py` | build Kafka/ClickHouse clients | auth/timeout/retry tuning, endpoint migrations |
 | `core/aiops_agent/context_lookup.py` | fetch recent similar alert counts from ClickHouse | context features, query window, query dimensions |
-| `core/aiops_agent/suggestion_engine.py` | generate suggestion payload and confidence | recommendation strategy, confidence scoring, schema evolution |
+| `core/aiops_agent/evidence_bundle.py` | build structured evidence bundles from alert/cluster context | topology/device/change context expansion, evidence normalization |
+| `core/aiops_agent/inference_schema.py` | define request/result schema for provider-facing inference | schema evolution, confidence conventions, request metadata |
+| `core/aiops_agent/inference_queue.py` | provide queue interface for slow-path inference requests | async queue swaps, batching, retry scheduling |
+| `core/aiops_agent/inference_worker.py` | pull requests from queue and invoke provider | worker concurrency, retry/backoff, observability |
+| `core/aiops_agent/providers.py` | provider abstraction with template and external HTTP provider entry | API migration, local-model provider, auth handling |
+| `core/aiops_agent/suggestion_engine.py` | generate final suggestion payload and confidence-bearing output | payload schema evolution, inference/evidence mapping |
 | `core/aiops_agent/output_sink.py` | persist suggestion JSONL by hour | retention policy, sink path layout |
 | `core/aiops_agent/service.py` | process loop, publish/commit semantics | retry policy, DLQ integration, idempotency hardening |
 | `core/aiops_agent/main.py` | startup wiring only | runtime composition and dependency injection |
 
 Cluster tuning envs (in `80-core-aiops-agent.yaml`):
-- `AIOPS_CLUSTER_WINDOW_SEC` (default `300`)
+- `AIOPS_CLUSTER_WINDOW_SEC` (default `600`)
 - `AIOPS_CLUSTER_MIN_ALERTS` (default `3`)
 - `AIOPS_CLUSTER_COOLDOWN_SEC` (default `300`)
+- `AIOPS_PROVIDER` (default `template`)
+- `AIOPS_PROVIDER_ENDPOINT_URL` (used when `AIOPS_PROVIDER=http`)
+- `AIOPS_PROVIDER_MODEL` (default `generic-aiops`)
 
 ## Build
 
@@ -112,6 +125,24 @@ python -m core.benchmark.pipeline_watch \
   --output-jsonl /data/netops-runtime/observability/pipeline-watch-8h.jsonl \
   --summary-json /data/netops-runtime/observability/pipeline-watch-8h-summary.json
 ```
+
+### 5) Runtime timestamp audit
+
+Use this when `alerts/*.jsonl` and `aiops/*.jsonl` appear to have inconsistent dates:
+
+```bash
+python -m core.benchmark.runtime_timestamp_audit \
+  --alerts-dir /data/netops-runtime/alerts \
+  --aiops-dir /data/netops-runtime/aiops
+```
+
+This compares:
+- alert file mtime vs payload `alert_ts`
+- suggestion file mtime vs payload `suggestion_ts`
+
+The purpose is to distinguish a true sink failure from a replay/backfill case where:
+- alert files are bucketed by historical `alert_ts`
+- aiops files are bucketed by current processing time
 
 ## Release Automation
 

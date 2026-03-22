@@ -21,6 +21,11 @@ def test_should_process_severity_respects_min_rank() -> None:
         cluster_window_sec=300,
         cluster_min_alerts=3,
         cluster_cooldown_sec=300,
+        provider="template",
+        provider_endpoint_url="",
+        provider_api_key="",
+        provider_model="generic-aiops",
+        provider_timeout_sec=30,
     )
     assert cfg.should_process_severity("warning") is False
     assert cfg.should_process_severity("critical") is True
@@ -35,3 +40,5 @@ def test_load_config_fallbacks_invalid_values(monkeypatch) -> None:
     assert cfg.cluster_window_sec >= 10
     assert cfg.cluster_min_alerts >= 2
     assert cfg.cluster_cooldown_sec >= 10
+    assert cfg.provider == "template"
+    assert cfg.provider_timeout_sec >= 5
