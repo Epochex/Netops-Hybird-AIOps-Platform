@@ -156,17 +156,26 @@
 
 ### 4.3 live runtime 当前结论
 
-`python3 -m core.benchmark.live_runtime_check` 在 2026-03-22 20:05 UTC 的关键结果：
+`python3 -m core.benchmark.live_runtime_check` 在 2026-03-22 20:11 UTC 的关键结果：
 
-- `latest_raw_payload_age_sec = 8`
-- `latest_alert_event_age_sec` 仍然很大
-- `history_backlog_suspected = true`
+- `history_backlog_suspected = false`
+- `latest_raw_payload_age_sec = 5`
+- `latest_alert_event_age_sec = 206`
+- 最新 alert 落盘文件已经变成：
+  - `alerts-20260322-20.jsonl`
 
-这不再表示 raw 仍旧积压，而是说明：
+最近 1000 条 alert 的字段出现率已经不再是全 0：
 
-- raw 已回到实时
-- alert 当前是否“最新”，还取决于规则阈值是否触发
-- `live_runtime_check` 的 `recent_alert_presence` 仍按“最新 alert_ts 文件”采样，在 replay / 人工阈值验证场景下会低估新字段出现率
+- `topology_context = 0.005`
+- `device_profile = 0.005`
+- `change_context = 0.003`
+
+含义：
+
+- raw 已经回到实时
+- alert 也已经重新进入当前时间窗口
+- 新字段已经开始在近期 alert 中出现
+- `suggestions` 仍滞后于实时 alert，需要后续单独观察 cluster 触发恢复情况
 
 ## 5. 本轮关键验证结论
 
@@ -209,7 +218,7 @@ edge 重置回实时后，再次做了短时阈值验证：
 
 ## 6. 当前剩余问题
 
-1. `core.benchmark.live_runtime_check` 的 `recent_alert_presence` 采样口径在 replay / 实验窗口下会误导，需要后续改成更贴近“最新写入”的视角
+1. `core.benchmark.live_runtime_check` 的 `recent_alert_presence` 在 replay / 实验窗口下仍可能低估字段厚度，后续可以再优化为更偏“最新写入”的取样口径
 2. `netops.aiops.suggestions.v1` 当前仍主要是历史 suggestion；新实时 alert 未必立即形成 suggestion，因为 cluster 条件本身更严格
 3. 当前 `documentation/` 仍未纳入 git 跟踪
 4. 本地分支还比 `origin/core-dev` 超前 3 个 commit，后续需要整理和提交

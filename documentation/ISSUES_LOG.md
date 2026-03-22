@@ -104,6 +104,17 @@
   - `change_context.score=30`
   - `change_context.change_refs=["crscore:30","craction:131072","crlevel:high"]`
 
+5. 最终 live runtime 已重新收敛到当前时间窗口
+- `python3 -m core.benchmark.live_runtime_check` 在 2026-03-22 20:11 UTC 显示：
+  - `history_backlog_suspected=false`
+  - `latest_raw_payload_age_sec=5`
+  - `latest_alert_event_age_sec=206`
+  - `alerts` 最新文件已变成 `alerts-20260322-20.jsonl`
+- 最近 1000 条 alert 的字段出现率也已不再为 0：
+  - `topology_context=0.005`
+  - `device_profile=0.005`
+  - `change_context=0.003`
+
 ### 仍需注意
 - `live_runtime_check` 当前的 `recent_alert_presence` 按“最新 alert_ts 文件”取样，在 replay / 实验阈值窗口下可能低估新字段出现率。
 - `suggestions` 当前仍主要反映较早的 cluster 触发结果；这不等于 core enrichment 失效，而是 AIOps 聚类门槛尚未在当前实时流量下自然满足。

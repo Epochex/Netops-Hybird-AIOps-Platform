@@ -196,6 +196,32 @@ checkpoint 关键事实：
 2. edge backlog 已被最短路径切回实时态
 3. edge 新字段能够进入实时 raw，并进一步进入 core enriched alert
 
+## 6.1 最终 runtime 收口结果
+
+在阈值恢复回 `200` 后，再次执行：
+
+- `python3 -m core.benchmark.live_runtime_check`
+
+得到的关键结果为：
+
+- `history_backlog_suspected=false`
+- `latest_raw_payload_age_sec=5`
+- `latest_alert_event_age_sec=206`
+- 最新 alert 文件：
+  - `alerts-20260322-20.jsonl`
+
+最近 1000 条 alert 的字段出现率：
+
+- `topology_context=0.005`
+- `device_profile=0.005`
+- `change_context=0.003`
+
+这说明：
+
+- raw 已回到实时
+- alert 也已重新进入当前时间窗口
+- 新字段已开始在“近期 alert”里出现，而不只是停留在单条样本验证
+
 ## 7. 当前残留限制
 
 1. `live_runtime_check` 里的 `recent_alert_presence` 仍按“最新 alert_ts 文件”采样，在 replay / 人工阈值验证场景下会低估新字段出现率
