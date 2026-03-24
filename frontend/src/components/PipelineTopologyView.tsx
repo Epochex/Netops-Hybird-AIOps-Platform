@@ -1,5 +1,12 @@
+import { lazy, Suspense } from 'react'
+import { ErrorBoundary } from './ErrorBoundary'
 import type { RuntimeSnapshot } from '../types'
-import { TopologyCanvas } from './TopologyCanvas'
+
+const TopologyCanvas = lazy(() =>
+  import('./TopologyCanvas').then((module) => ({
+    default: module.TopologyCanvas,
+  })),
+)
 
 interface PipelineTopologyViewProps {
   snapshot: RuntimeSnapshot
@@ -26,7 +33,14 @@ export function PipelineTopologyView({
             </div>
             <span className="section-kicker">module / topic / control graph</span>
           </div>
-          <TopologyCanvas nodes={snapshot.stageNodes} links={snapshot.stageLinks} />
+          <ErrorBoundary title="Topology Graph">
+            <Suspense fallback={<div className="flow-frame chart-fallback">loading topology...</div>}>
+              <TopologyCanvas
+                nodes={snapshot.stageNodes}
+                links={snapshot.stageLinks}
+              />
+            </Suspense>
+          </ErrorBoundary>
         </section>
 
         <section className="section">

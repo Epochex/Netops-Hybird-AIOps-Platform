@@ -1,6 +1,15 @@
+import { lazy, Suspense } from 'react'
+import { ErrorBoundary } from './ErrorBoundary'
 import type { RuntimeSnapshot } from '../types'
-import { TopologyCanvas } from './TopologyCanvas'
-import { TrendChart } from './TrendChart'
+
+const TrendChart = lazy(() =>
+  import('./TrendChart').then((module) => ({ default: module.TrendChart })),
+)
+const TopologyCanvas = lazy(() =>
+  import('./TopologyCanvas').then((module) => ({
+    default: module.TopologyCanvas,
+  })),
+)
 
 interface LiveFlowConsoleProps {
   snapshot: RuntimeSnapshot
@@ -53,24 +62,28 @@ export function LiveFlowConsole({
               </div>
               <span className="section-kicker">current-day activity</span>
             </div>
-            <div className="chart-shell">
-              <TrendChart
-                title="Alert vs Suggestion cadence"
-                labels={snapshot.cadence.labels}
-                series={[
-                  {
-                    name: 'alerts',
-                    data: snapshot.cadence.alerts,
-                    color: '#ff7a20',
-                  },
-                  {
-                    name: 'suggestions',
-                    data: snapshot.cadence.suggestions,
-                    color: '#69f9ff',
-                  },
-                ]}
-              />
-            </div>
+            <ErrorBoundary title="Cadence Chart">
+              <Suspense fallback={<div className="chart-shell chart-fallback">loading chart...</div>}>
+                <div className="chart-shell">
+                  <TrendChart
+                    title="Alert vs Suggestion cadence"
+                    labels={snapshot.cadence.labels}
+                    series={[
+                      {
+                        name: 'alerts',
+                        data: snapshot.cadence.alerts,
+                        color: '#ff7a20',
+                      },
+                      {
+                        name: 'suggestions',
+                        data: snapshot.cadence.suggestions,
+                        color: '#69f9ff',
+                      },
+                    ]}
+                  />
+                </div>
+              </Suspense>
+            </ErrorBoundary>
           </section>
 
           <section className="section aside-panel">
@@ -83,20 +96,24 @@ export function LiveFlowConsole({
               </div>
               <span className="section-kicker">current-day alert sample</span>
             </div>
-            <div className="chart-shell">
-              <TrendChart
-                title="Evidence presence"
-                labels={snapshot.evidenceCoverage.labels}
-                series={[
-                  {
-                    name: 'coverage',
-                    data: snapshot.evidenceCoverage.values,
-                    color: '#6cff9b',
-                  },
-                ]}
-                unit="%"
-              />
-            </div>
+            <ErrorBoundary title="Evidence Coverage Chart">
+              <Suspense fallback={<div className="chart-shell chart-fallback">loading chart...</div>}>
+                <div className="chart-shell">
+                  <TrendChart
+                    title="Evidence presence"
+                    labels={snapshot.evidenceCoverage.labels}
+                    series={[
+                      {
+                        name: 'coverage',
+                        data: snapshot.evidenceCoverage.values,
+                        color: '#6cff9b',
+                      },
+                    ]}
+                    unit="%"
+                  />
+                </div>
+              </Suspense>
+            </ErrorBoundary>
           </section>
 
           <section className="section aside-panel">
@@ -148,7 +165,15 @@ export function LiveFlowConsole({
               </div>
               <span className="section-kicker">tactical topology, not dashboard</span>
             </div>
-            <TopologyCanvas nodes={snapshot.stageNodes} links={snapshot.stageLinks} compact />
+            <ErrorBoundary title="Pipeline Topology Canvas">
+              <Suspense fallback={<div className="flow-frame compact chart-fallback">loading topology...</div>}>
+                <TopologyCanvas
+                  nodes={snapshot.stageNodes}
+                  links={snapshot.stageLinks}
+                  compact
+                />
+              </Suspense>
+            </ErrorBoundary>
             <div className="flow-stage-footer">
               <div className="stage-footnote">
                 <strong>Deterministic core first</strong>

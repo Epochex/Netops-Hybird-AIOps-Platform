@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import './App.css'
 import { EvidenceDrawer } from './components/EvidenceDrawer'
+import { ErrorBoundary } from './components/ErrorBoundary'
 import { LiveFlowConsole } from './components/LiveFlowConsole'
 import { PipelineTopologyView } from './components/PipelineTopologyView'
 import { runtimeSnapshot } from './data/runtimeModel'
@@ -32,6 +33,30 @@ function App() {
       ) ?? suggestionPool[0],
     [activeSuggestionId, suggestionPool],
   )
+
+  if (!selectedSuggestion) {
+    return (
+      <div className="app-shell">
+        <section className="page" style={{ borderRight: 'none' }}>
+          <section className="section error-panel">
+            <div className="section-header">
+              <div>
+                <h2 className="section-title">No Suggestion Available</h2>
+                <span className="section-subtitle">
+                  The frontend has no suggestion slice to bind the current
+                  runtime story to.
+                </span>
+              </div>
+              <span className="section-kicker">empty runtime selection</span>
+            </div>
+            <div className="error-panel-body">
+              <strong>Check `/api/runtime/snapshot` and the local fallback model.</strong>
+            </div>
+          </section>
+        </section>
+      </div>
+    )
+  }
 
   return (
     <div className="app-shell">
@@ -85,24 +110,28 @@ function App() {
       </nav>
 
       <main className="workspace">
-        {view === 'console' ? (
-          <LiveFlowConsole
-            snapshot={snapshot}
-            selectedSuggestionId={selectedSuggestion.id}
-            onSelectSuggestion={setPreferredSuggestionId}
-          />
-        ) : (
-          <PipelineTopologyView
-            snapshot={snapshot}
-            selectedSuggestionId={selectedSuggestion.id}
-            onSelectSuggestion={setPreferredSuggestionId}
-          />
-        )}
+        <ErrorBoundary title="Primary View">
+          {view === 'console' ? (
+            <LiveFlowConsole
+              snapshot={snapshot}
+              selectedSuggestionId={selectedSuggestion.id}
+              onSelectSuggestion={setPreferredSuggestionId}
+            />
+          ) : (
+            <PipelineTopologyView
+              snapshot={snapshot}
+              selectedSuggestionId={selectedSuggestion.id}
+              onSelectSuggestion={setPreferredSuggestionId}
+            />
+          )}
+        </ErrorBoundary>
 
-        <EvidenceDrawer
-          suggestion={selectedSuggestion}
-          controls={snapshot.strategyControls}
-        />
+        <ErrorBoundary title="Evidence Drawer">
+          <EvidenceDrawer
+            suggestion={selectedSuggestion}
+            controls={snapshot.strategyControls}
+          />
+        </ErrorBoundary>
       </main>
     </div>
   )
