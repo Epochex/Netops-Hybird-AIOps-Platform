@@ -1,294 +1,373 @@
-import { lazy, Suspense } from 'react'
-import { ErrorBoundary } from './ErrorBoundary'
-import type { RuntimeSnapshot } from '../types'
-
-const TrendChart = lazy(() =>
-  import('./TrendChart').then((module) => ({ default: module.TrendChart })),
-)
-const TopologyCanvas = lazy(() =>
-  import('./TopologyCanvas').then((module) => ({
-    default: module.TopologyCanvas,
-  })),
-)
+import { useMemo } from 'react'
+import type {
+  FeedEvent,
+  RuntimeSnapshot,
+  StageNode,
+  StrategyControl,
+  SuggestionRecord,
+} from '../types'
 
 interface LiveFlowConsoleProps {
   snapshot: RuntimeSnapshot
-  selectedSuggestionId: string
+  selectedSuggestion: SuggestionRecord
   onSelectSuggestion: (suggestionId: string) => void
+}
+
+interface LifecycleBlock {
+  id: string
+  title: string
+  subtitle: string
+  status: StageNode['status']
+  metrics: Array<{ label: string; value: string }>
+}
+
+function controlValue(controls: StrategyControl[], label: string) {
+  return controls.find((control) => control.label === label)?.currentValue ?? 'n/a'
+}
+
+function buildLifecycle(snapshot: RuntimeSnapshot): LifecycleBlock[] {
+  const stageLookup = new Map(snapshot.stageNodes.map((node) => [node.id, node]))
+  const clusterTarget = Number.parseInt(
+    controlValue(snapshot.strategyControls, 'AIOPS_CLUSTER_MIN_ALERTS'),
+    10,
+  )
+  const clusterWindow = controlValue(
+    snapshot.strategyControls,
+    'AIOPS_CLUSTER_WINDOW_SEC',
+  )
+  const clusterProgress = Math.max(
+    0,
+    ...snapshot.clusterWatch.map((item) => item.progress),
+  )
+  const clusterLive = snapshot.suggestions.some(
+    (suggestion) => suggestion.scope === 'cluster',
+  )
+  const clusterStatus: StageNode['status'] = clusterLive
+    ? 'flowing'
+    : clusterProgress > 0
+      ? 'watch'
+      : 'steady'
+
+  const sourceIds = [
+    'fortigate',
+    'ingest',
+    'forwarder',
+    'raw-topic',
+    'correlator',
+    'alerts-topic',
+    'aiops-agent',
+    'suggestions-topic',
+    'remediation',
+  ]
+
+  const orderedStages = sourceIds
+    .map((id) => stageLookup.get(id))
+    .filter((stage): stage is StageNode => Boolean(stage))
+    .map((stage) => ({
+      id: stage.id,
+      title: stage.title,
+      subtitle: stage.subtitle,
+      status: stage.status,
+      metrics: stage.metrics.slice(0, 2),
+    }))
+
+  const clusterBlock: LifecycleBlock = {
+    id: 'cluster-window',
+    title: 'cluster window',
+    subtitle: 'same-key aggregation gate',
+    status: clusterStatus,
+    metrics: [
+      {
+        label: 'progress',
+        value: `${clusterProgress}/${Number.isFinite(clusterTarget) ? clusterTarget : 3}`,
+      },
+      {
+        label: 'window',
+        value: `${clusterWindow}s`,
+      },
+    ],
+  }
+
+  return [
+    ...orderedStages.slice(0, 6),
+    clusterBlock,
+    ...orderedStages.slice(6),
+  ]
+}
+
+function pulseStageIds(kind: FeedEvent['kind'], scope: SuggestionRecord['scope']) {
+  if (kind === 'raw') {
+    return ['fortigate', 'ingest', 'forwarder', 'raw-topic']
+  }
+
+  if (kind === 'alert') {
+    return ['correlator', 'alerts-topic', 'cluster-window']
+  }
+
+  return scope === 'cluster'
+    ? ['cluster-window', 'aiops-agent', 'suggestions-topic', 'remediation']
+    : ['aiops-agent', 'suggestions-topic', 'remediation']
+}
+
+function currentStageIndex(blocks: LifecycleBlock[], kind: FeedEvent['kind']) {
+  if (kind === 'raw') {
+    return blocks.findIndex((block) => block.id === 'raw-topic')
+  }
+
+  if (kind === 'alert') {
+    return blocks.findIndex((block) => block.id === 'cluster-window')
+  }
+
+  return blocks.findIndex((block) => block.id === 'suggestions-topic')
 }
 
 export function LiveFlowConsole({
   snapshot,
-  selectedSuggestionId,
+  selectedSuggestion,
   onSelectSuggestion,
 }: LiveFlowConsoleProps) {
+  const pulseKind = snapshot.feed[0]?.kind ?? 'suggestion'
+  const lifecycle = useMemo(() => buildLifecycle(snapshot), [snapshot])
+  const pulseIds = useMemo(
+    () => pulseStageIds(pulseKind, selectedSuggestion.scope),
+    [pulseKind, selectedSuggestion.scope],
+  )
+  const leadEventId =
+    snapshot.feed[0]?.id ??
+    snapshot.runtime.latestSuggestionTs ??
+    snapshot.runtime.latestAlertTs
+  const tickerFeed = snapshot.feed.slice(0, 8)
+  const compactMetrics = snapshot.overviewMetrics.filter((metric) =>
+    ['raw-freshness', 'backlog', 'current-day-volume', 'closure'].includes(
+      metric.id,
+    ),
+  )
+  const activeStageIndex = currentStageIndex(lifecycle, pulseKind)
+
   return (
-    <section className="page">
-      <div className="section">
+    <section className="page console-page">
+      <section className="section lifecycle-stage">
         <div className="section-header">
           <div>
-            <h2 className="section-title">Global Runtime Overview</h2>
+            <h2 className="section-title">Live Event Lifecycle</h2>
             <span className="section-subtitle">
-              Not a panel wall. A compact situational rail for freshness,
-              backlog, day volume, and closure state.
+              Process first: ingest, deterministic alerting, cluster gate,
+              suggestion, remediation boundary.
             </span>
           </div>
-          <span className="section-kicker">{snapshot.runtime.contextNote}</span>
+          <div className="annotation-stack">
+            <span className="section-kicker">directional runtime flow</span>
+            <span className={`signal-chip tone-${pulseKind}`}>{pulseKind}</span>
+          </div>
         </div>
-        <div className="overview-grid">
-          {snapshot.overviewMetrics.map((metric) => (
-            <article
-              key={metric.id}
-              className={`metric-card state-${metric.state}`}
-            >
-              <span className="metric-label">{metric.label}</span>
-              <strong className="metric-value">{metric.value}</strong>
-              <span className="metric-hint">{metric.hint}</span>
-            </article>
+
+        <div className="lifecycle-track">
+          {lifecycle.map((block, index) => {
+            const isPulsing = pulseIds.includes(block.id)
+            const pulseClass = isPulsing
+              ? `pulse-${leadEventId.length % 2}`
+              : ''
+            const reached = index <= activeStageIndex ? 'is-reached' : ''
+
+            return (
+              <div
+                key={`${block.id}-${isPulsing ? leadEventId : 'steady'}`}
+                className="stage-segment"
+              >
+                <article
+                  className={`stage-card state-${block.status} ${pulseClass} ${reached}`}
+                >
+                  <div className="stage-header">
+                    <span className="stage-index">
+                      {(index + 1).toString().padStart(2, '0')}
+                    </span>
+                    <div>
+                      <strong>{block.title}</strong>
+                      <span>{block.subtitle}</span>
+                    </div>
+                  </div>
+                  <ul className="stage-metrics">
+                    {block.metrics.map((metric) => (
+                      <li key={`${block.id}-${metric.label}`}>
+                        <span>{metric.label}</span>
+                        <strong>{metric.value}</strong>
+                      </li>
+                    ))}
+                  </ul>
+                </article>
+
+                {index < lifecycle.length - 1 ? (
+                  <div
+                    className={`stage-link ${pulseIds.includes(lifecycle[index + 1].id) ? `pulse-${leadEventId.length % 2}` : ''}`}
+                    aria-hidden="true"
+                  >
+                    <span className="stage-link-line" />
+                    <span className="stage-link-runner" />
+                  </div>
+                ) : null}
+              </div>
+            )
+          })}
+        </div>
+
+        <div className="micro-metric-rail">
+          {compactMetrics.map((metric) => (
+            <div key={metric.id} className={`micro-metric state-${metric.state}`}>
+              <span>{metric.label}</span>
+              <strong>{metric.value}</strong>
+            </div>
           ))}
         </div>
-      </div>
+      </section>
 
-      <div className="page-grid">
-        <aside className="stack">
-          <section className="section aside-panel">
-            <div className="section-header">
-              <div>
-                <h2 className="section-title">Cadence</h2>
-                <span className="section-subtitle">
-                  Alerts and suggestions move together when the slow path is
-                  healthy.
-                </span>
-              </div>
-              <span className="section-kicker">current-day activity</span>
+      <div className="console-core">
+        <section className="section cluster-rail">
+          <div className="section-header">
+            <div>
+              <h2 className="section-title">Cluster Watch</h2>
+              <span className="section-subtitle">
+                Same-key pre-trigger surface for the live cluster path.
+              </span>
             </div>
-            <ErrorBoundary title="Cadence Chart">
-              <Suspense fallback={<div className="chart-shell chart-fallback">loading chart...</div>}>
-                <div className="chart-shell">
-                  <TrendChart
-                    title="Alert vs Suggestion cadence"
-                    labels={snapshot.cadence.labels}
-                    series={[
-                      {
-                        name: 'alerts',
-                        data: snapshot.cadence.alerts,
-                        color: '#ff7a20',
-                      },
-                      {
-                        name: 'suggestions',
-                        data: snapshot.cadence.suggestions,
-                        color: '#69f9ff',
-                      },
-                    ]}
-                  />
-                </div>
-              </Suspense>
-            </ErrorBoundary>
-          </section>
-
-          <section className="section aside-panel">
-            <div className="section-header">
-              <div>
-                <h2 className="section-title">Evidence Thickness</h2>
-                <span className="section-subtitle">
-                  Today’s sample suggests the evidence path is no longer thin.
-                </span>
-              </div>
-              <span className="section-kicker">current-day alert sample</span>
-            </div>
-            <ErrorBoundary title="Evidence Coverage Chart">
-              <Suspense fallback={<div className="chart-shell chart-fallback">loading chart...</div>}>
-                <div className="chart-shell">
-                  <TrendChart
-                    title="Evidence presence"
-                    labels={snapshot.evidenceCoverage.labels}
-                    series={[
-                      {
-                        name: 'coverage',
-                        data: snapshot.evidenceCoverage.values,
-                        color: '#6cff9b',
-                      },
-                    ]}
-                    unit="%"
-                  />
-                </div>
-              </Suspense>
-            </ErrorBoundary>
-          </section>
-
-          <section className="section aside-panel">
-            <div className="section-header">
-              <div>
-                <h2 className="section-title">Cluster Pre-Trigger Watch</h2>
-                <span className="section-subtitle">
-                  Same aggregator semantics as the backend: rule + severity +
-                  service + src_device_key.
-                </span>
-              </div>
-              <span className="section-kicker">600s / min=3 watch</span>
-            </div>
-            <ul className="cluster-list">
-              {snapshot.clusterWatch.map((item) => (
-                <li key={item.key} className="cluster-item">
-                  <div className="cluster-row">
-                    <div className="cluster-key">
-                      <strong>{item.service}</strong>
-                      <span className="cluster-meta">{item.device}</span>
-                    </div>
-                    <span className="cluster-ratio">
-                      {item.progress}/{item.target}
-                    </span>
-                  </div>
-                  <div className="progress" aria-hidden="true">
-                    <span
-                      style={{
-                        width: `${(item.progress / item.target) * 100}%`,
-                      }}
-                    />
-                  </div>
-                  <p className="cluster-meta">{item.note}</p>
-                </li>
-              ))}
-            </ul>
-          </section>
-        </aside>
-
-        <div className="canvas-stack">
-          <section className="section">
-            <div className="section-header">
-              <div>
-                <h2 className="section-title">Event Flow / Pipeline Topology</h2>
-                <span className="section-subtitle">
-                  Every major block maps to a real runtime module, Kafka topic,
-                  or control boundary in the repository.
-                </span>
-              </div>
-              <span className="section-kicker">tactical topology, not dashboard</span>
-            </div>
-            <ErrorBoundary title="Pipeline Topology Canvas">
-              <Suspense fallback={<div className="flow-frame compact chart-fallback">loading topology...</div>}>
-                <TopologyCanvas
-                  nodes={snapshot.stageNodes}
-                  links={snapshot.stageLinks}
-                  compact
-                />
-              </Suspense>
-            </ErrorBoundary>
-            <div className="flow-stage-footer">
-              <div className="stage-footnote">
-                <strong>Deterministic core first</strong>
-                <span>
-                  Correlator and alerts stay visually ahead of AIOps so the main
-                  chain remains explainable.
-                </span>
-              </div>
-              <div className="stage-footnote">
-                <strong>Cluster path stays visible</strong>
-                <span>
-                  Cluster-scope is shown as a live watch surface even when no new
-                  natural cluster hit is present.
-                </span>
-              </div>
-              <div className="stage-footnote">
-                <strong>Execution boundary stays honest</strong>
-                <span>
-                  Remediation is presented as the next control point instead of a
-                  fake active runtime stage.
-                </span>
-              </div>
-            </div>
-          </section>
-
-          <div className="activity-grid">
-            <section className="section">
-              <div className="section-header">
-                <div>
-                  <h2 className="section-title">Runtime Chain</h2>
-                  <span className="section-subtitle">
-                    One event story, flattened into readable causality rather than
-                    independent panels.
-                  </span>
-                </div>
-                <span className="section-kicker">
-                  selected flow: {selectedSuggestionId}
-                </span>
-              </div>
-              <ol className="timeline-list">
-                {snapshot.timeline.map((step) => (
-                  <li key={step.id} className="timeline-item">
-                    <div className="timeline-stamp">{step.stamp}</div>
-                    <div>
-                      <h3>{step.title}</h3>
-                      <p>{step.detail}</p>
-                    </div>
-                  </li>
-                ))}
-              </ol>
-            </section>
-
-            <section className="section">
-              <div className="section-header">
-                <div>
-                  <h2 className="section-title">Live Suggestion Slice</h2>
-                  <span className="section-subtitle">
-                    The right drawer always reflects the selected suggestion.
-                  </span>
-                </div>
-                <span className="section-kicker">real payloads, current day</span>
-              </div>
-              <div className="storyboard">
-                <p>
-                  Select a suggestion to pivot the evidence drawer. This keeps the
-                  center pane process-centric while the right pane stays
-                  explanation-centric.
-                </p>
-                <ul className="summary-list">
-                  {snapshot.suggestions.map((suggestion) => (
-                    <li key={suggestion.id}>
-                      <button
-                        type="button"
-                        className={
-                          selectedSuggestionId === suggestion.id
-                            ? 'tab is-active'
-                            : 'tab'
-                        }
-                        onClick={() => onSelectSuggestion(suggestion.id)}
-                      >
-                        {suggestion.context.service}
-                      </button>
-                      <strong>{suggestion.context.srcDeviceKey}</strong>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            </section>
+            <span className="section-kicker">600s / min=3</span>
           </div>
-        </div>
+          <ul className="cluster-list">
+            {snapshot.clusterWatch.map((item) => (
+              <li key={item.key} className="cluster-item">
+                <div className="cluster-head">
+                  <div>
+                    <strong>{item.service}</strong>
+                    <span>{item.device}</span>
+                  </div>
+                  <span className="cluster-ratio">
+                    {item.progress}/{item.target}
+                  </span>
+                </div>
+                <div className="cluster-progress" aria-hidden="true">
+                  <span
+                    style={{
+                      width: `${Math.min(100, (item.progress / item.target) * 100)}%`,
+                    }}
+                  />
+                </div>
+                <p>{item.note}</p>
+              </li>
+            ))}
+          </ul>
+        </section>
+
+        <section key={selectedSuggestion.id} className="section story-panel">
+          <div className="section-header">
+            <div>
+              <h2 className="section-title">Selected Runtime Story</h2>
+              <span className="section-subtitle">
+                Timeline-driven explanation for the active suggestion slice.
+              </span>
+            </div>
+            <span className="section-kicker">{selectedSuggestion.scope}-scope</span>
+          </div>
+
+          <div className="story-summary">
+            <div>
+              <p className="story-marker">active slice</p>
+              <h3>{selectedSuggestion.summary}</h3>
+            </div>
+            <div className="story-badges">
+              <span className="signal-chip tone-suggestion">
+                {selectedSuggestion.context.service}
+              </span>
+              <span className="signal-chip tone-neutral">
+                {selectedSuggestion.context.srcDeviceKey}
+              </span>
+              <span className="signal-chip tone-alert">
+                {selectedSuggestion.priority}
+              </span>
+            </div>
+          </div>
+
+          <ol className="timeline-list">
+            {snapshot.timeline.map((step, index) => (
+              <li
+                key={`${selectedSuggestion.id}-${step.id}`}
+                className={`timeline-item ${index <= activeStageIndex ? 'is-active' : ''}`}
+                style={{ animationDelay: `${index * 90}ms` }}
+              >
+                <span className="timeline-stamp">{step.stamp}</span>
+                <div className="timeline-body">
+                  <h3>{step.title}</h3>
+                  <p>{step.detail}</p>
+                </div>
+              </li>
+            ))}
+          </ol>
+        </section>
+
+        <section className="section slice-panel">
+          <div className="section-header">
+            <div>
+              <h2 className="section-title">Live Slices</h2>
+              <span className="section-subtitle">
+                Select the current alert or cluster thread. The right drawer
+                pivots with it.
+              </span>
+            </div>
+            <span className="section-kicker">evidence pivot</span>
+          </div>
+
+          <ul className="slice-list">
+            {snapshot.suggestions.slice(0, 12).map((suggestion) => (
+              <li key={suggestion.id}>
+                <button
+                  type="button"
+                  className={
+                    selectedSuggestion.id === suggestion.id
+                      ? 'slice-button is-active'
+                      : 'slice-button'
+                  }
+                  onClick={() => onSelectSuggestion(suggestion.id)}
+                >
+                  <div className="slice-button-head">
+                    <span className={`signal-chip tone-${suggestion.scope === 'cluster' ? 'alert' : 'suggestion'}`}>
+                      {suggestion.scope}
+                    </span>
+                    <span>{suggestion.suggestionTs}</span>
+                  </div>
+                  <strong>{suggestion.context.service}</strong>
+                  <span>{suggestion.context.srcDeviceKey}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
       </div>
 
-      <section className="section">
+      <section className="section activity-strip">
         <div className="section-header">
           <div>
-            <h2 className="section-title">Bottom Real-Time Feed</h2>
+            <h2 className="section-title">Live Activity Strip</h2>
             <span className="section-subtitle">
-              Raw, alert, and suggestion are kept in one live strip so the story
-              stays chronological.
+              Runtime motion is carried by real feed events, not decorative
+              animation.
             </span>
           </div>
-          <span className="section-kicker">chronology over panel sprawl</span>
+          <span className="section-kicker">raw → alert → suggestion</span>
         </div>
-        <ul className="feed-list">
-          {snapshot.feed.map((event) => (
-            <li key={event.id} className="feed-item">
-              <span className="feed-stamp">{event.stamp}</span>
-              <span className={`feed-kind kind-${event.kind}`}>{event.kind}</span>
-              <div className="feed-body">
+
+        <div key={leadEventId} className="ticker-window">
+          <div className="ticker-track">
+            {[...tickerFeed, ...tickerFeed].map((event, index) => (
+              <article
+                key={`${event.id}-${index}`}
+                className={`ticker-item kind-${event.kind}`}
+              >
+                <span className="ticker-stamp">{event.stamp}</span>
+                <span className="ticker-kind">{event.kind}</span>
                 <strong>{event.title}</strong>
                 <span>{event.detail}</span>
-              </div>
-            </li>
-          ))}
-        </ul>
+              </article>
+            ))}
+          </div>
+        </div>
       </section>
     </section>
   )
