@@ -94,7 +94,7 @@ flowchart LR
   - Keep remediation explicit as a control boundary rather than pretending execution is already part of the live runtime.
 - Backend integration
   - `GET /api/runtime/snapshot` hydrates the initial view.
-  - `GET /api/runtime/stream` pushes live `RuntimeSnapshot` updates over SSE.
+  - `GET /api/runtime/stream` pushes SSE envelopes (`snapshot`, `delta`, `heartbeat`) so the UI can update only the affected stage/event region.
   - The gateway derives state from `/data/netops-runtime` JSONL sinks plus deployment env values in `core/` and `edge/`.
   - Local dev uses Vite proxying `/api` to `:8026`; deployed mode is same-origin, so CORS is not part of the default path.
 - Key interaction chain
@@ -152,31 +152,18 @@ Relationship between stages:
 ### Realtime UI Update Model
 
 - Current implementation
-  - The gateway serves an initial `GET /api/runtime/snapshot`, then pushes a full `RuntimeSnapshot` over SSE every `5` seconds by default (`NETOPS_CONSOLE_STREAM_INTERVAL_SEC=5`).
-  - This is intentionally simple and robust for the current demo/operations phase, but it means the frontend is refreshed as a coarse full-state heartbeat rather than as a stage-by-stage event stream.
+  - The gateway serves an initial `GET /api/runtime/snapshot`, then keeps an SSE stream open with event envelopes: initial `snapshot`, event-triggered `delta`, and low-rate `heartbeat`.
+  - Runtime deltas are emitted when the feed or cluster gate actually changes; the default poll interval for detecting file-based updates is now `NETOPS_CONSOLE_STREAM_INTERVAL_SEC=1`.
 - Why the public proxy path can feel less “live”
-  - The current SSE stream carries whole-snapshot refreshes, not per-stage deltas.
-  - The public demo path adds WAN + proxy + tailnet hops on top of that heartbeat model, so motion feels less immediate than local/Tailscale-direct viewing.
-- Planned next step
-  - Move from `full snapshot every N seconds` to `event-triggered delta stream`.
-  - Emit stage/state changes such as:
-    - raw fact observed
-    - alert emitted
-    - cluster progress updated
-    - suggestion emitted
-    - remediation boundary entered
-  - Let the frontend maintain a stable local state model and animate only the affected stage/event block.
+  - The stream now carries stage deltas, but the public demo path still adds WAN + proxy + tailnet hops on top of the local file-poll detection loop.
+  - This means public viewers should see materially better responsiveness than the old 5-second heartbeat, but still not the same feel as direct local/Tailscale access.
 - Stage timers
-  - Yes, per-stage/per-action timers are feasible, but they should be driven by real stage timestamps rather than decorative client timers.
-  - For each visible stage transition, the recommended model is:
-    - `started_at`
-    - `ended_at`
-    - `duration_ms`
-    - `source_event_id / alert_id / suggestion_id`
-  - Not every stage currently exposes enough audit timestamps to calculate a real duration, so some stages would initially show `known boundary timestamps` while the richer timer model is added incrementally.
+  - The lifecycle cards now reserve a consistent action/timing band under each stage.
+  - Only stages with meaningful boundaries render a real elapsed duration; other stages use the same band to show state, gate semantics, or reserved-control status.
+  - This keeps the UI honest: `FortiGate` and `Remediation Loop` are not faked into “latency measurements”, while `edge -> alert`, cluster window span, and `alert -> suggestion` can show real timing metadata.
 - Resource impact
-  - Moving to event-triggered updates will **not** materially increase resource usage if the stream is limited to stage transitions and operator-relevant events.
-  - It may even reduce gateway I/O compared with repeatedly rebuilding full snapshots from JSONL every `5` seconds.
+  - Event-triggered stage updates do **not** materially increase resource usage if the stream is limited to operator-relevant transitions.
+  - It can reduce perceived latency while keeping bandwidth/I/O bounded, because the UI only animates changed regions instead of treating every refresh as a full-screen state change.
   - The expensive version would be pushing every raw fact directly to the UI; that is not recommended.
   - The practical target is: keep raw/high-volume data in Kafka/runtime files, and push only stage deltas plus timing metadata to the frontend.
 

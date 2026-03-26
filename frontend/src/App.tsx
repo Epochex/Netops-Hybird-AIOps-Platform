@@ -15,7 +15,7 @@ function metricValue(snapshot: ReturnType<typeof useRuntimeSnapshot>['snapshot']
 }
 
 function App() {
-  const { snapshot, connectionState } = useRuntimeSnapshot()
+  const { snapshot, latestDelta, connectionState } = useRuntimeSnapshot()
   const suggestionPool =
     snapshot.suggestions.length > 0
       ? snapshot.suggestions
@@ -128,6 +128,7 @@ function App() {
           {view === 'console' ? (
             <LiveFlowConsole
               snapshot={snapshot}
+              latestDelta={latestDelta}
               selectedSuggestion={selectedSuggestion}
               onSelectSuggestion={setPreferredSuggestionId}
             />

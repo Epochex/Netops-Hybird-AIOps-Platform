@@ -13,6 +13,31 @@ export interface StageMetric {
   value: string
 }
 
+export type StageTelemetryMode =
+  | 'timestamp'
+  | 'duration'
+  | 'gate'
+  | 'status'
+  | 'reserved'
+
+export type StageTelemetryState =
+  | 'complete'
+  | 'active'
+  | 'watch'
+  | 'steady'
+  | 'planned'
+
+export interface StageTelemetry {
+  stageId: string
+  mode: StageTelemetryMode
+  state: StageTelemetryState
+  label: string
+  value?: string
+  startedAt?: string
+  endedAt?: string
+  durationMs?: number | null
+}
+
 export interface StageNode {
   id: string
   title: string
@@ -32,9 +57,11 @@ export interface StageLink {
 
 export interface TimelineStep {
   id: string
+  stageId?: string
   stamp: string
   title: string
   detail: string
+  durationMs?: number | null
 }
 
 export interface SuggestionRecord {
@@ -68,6 +95,8 @@ export interface SuggestionRecord {
   confidence: number
   confidenceLabel: string
   confidenceReason: string
+  timeline?: TimelineStep[]
+  stageTelemetry?: StageTelemetry[]
 }
 
 export interface ClusterWatchItem {
@@ -104,6 +133,34 @@ export interface FeedEvent {
   hypothesisCount?: string
   evidence?: string
 }
+
+export type RuntimeDeltaKind = FeedEvent['kind'] | 'cluster' | 'system'
+
+export interface RuntimeStreamDelta {
+  id: string
+  emittedAt: string
+  kind: RuntimeDeltaKind
+  stageIds: string[]
+  feedIds: string[]
+  reason: 'feed' | 'cluster-watch' | 'system'
+}
+
+export type RuntimeStreamEnvelope =
+  | {
+      type: 'snapshot'
+      emittedAt: string
+      snapshot: RuntimeSnapshot
+    }
+  | {
+      type: 'delta'
+      emittedAt: string
+      snapshot: RuntimeSnapshot
+      delta: RuntimeStreamDelta
+    }
+  | {
+      type: 'heartbeat'
+      emittedAt: string
+    }
 
 export interface RuntimeSnapshot {
   repo: {

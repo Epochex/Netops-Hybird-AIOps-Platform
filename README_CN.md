@@ -93,7 +93,7 @@ flowchart LR
   - 把 remediation 明确为控制边界，而不是伪装成已经接通的实时执行阶段。
 - 与后端对接方式
   - `GET /api/runtime/snapshot` 用于页面初始水合。
-  - `GET /api/runtime/stream` 通过 SSE 推送实时 `RuntimeSnapshot`。
+  - `GET /api/runtime/stream` 通过 SSE 推送事件信封（`snapshot`、`delta`、`heartbeat`），让前端只更新受影响的阶段和事件区块。
   - 网关直接读取 `/data/netops-runtime` 下的 JSONL sink，并从 `core/`、`edge/` deployment 中提取运行控制参数。
   - 本地开发由 Vite 代理 `/api` 到 `:8026`；部署态采用同源服务，默认路径不依赖 CORS。
 - 关键交互链路
@@ -151,31 +151,18 @@ flowchart LR
 ### 前端实时更新模型
 
 - 当前实现
-  - 网关先提供一次 `GET /api/runtime/snapshot`，然后默认每 `5` 秒通过 SSE 推送一份完整 `RuntimeSnapshot`（`NETOPS_CONSOLE_STREAM_INTERVAL_SEC=5`）。
-  - 这个实现的优点是简单、稳定、适合当前 demo/观测阶段；缺点是前端拿到的是“整包状态心跳”，不是“按阶段推进的事件流”。
+  - 网关先提供一次 `GET /api/runtime/snapshot`，然后保持 SSE 长连接，并发送 `snapshot`、按变化触发的 `delta`、低频 `heartbeat`。
+  - 现在用于检测 runtime 文件变化的默认轮询间隔是 `NETOPS_CONSOLE_STREAM_INTERVAL_SEC=1`，但只有真正发生 feed/cluster 变化时才会向前端发 delta。
 - 为什么公网代理路径看起来没那么“活”
-  - 现在 SSE 传的是完整 snapshot，不是逐阶段 delta。
-  - 公网演示链路又叠加了 WAN + proxy + tailnet 多跳，所以视觉上会比本地/Tailscale 直连更钝。
-- 下一步建议
-  - 从“每 N 秒全量快照”切到“按事件触发的 delta stream”。
-  - 只推送关键阶段变化，例如：
-    - raw fact observed
-    - alert emitted
-    - cluster progress updated
-    - suggestion emitted
-    - remediation boundary entered
-  - 前端本地维护稳定状态，只重绘受影响的阶段/事件块。
+  - 现在已经切到阶段 delta，但公网演示链路仍然叠加了 WAN + proxy + tailnet 多跳，以及本地文件轮询探测。
+  - 所以公网体验会明显好于旧的 5 秒整包心跳，但仍然不会像本地/Tailscale 直连那样“贴着源站”。
 - 阶段计时
-  - 可以做，而且应该基于真实阶段时间戳来做，而不是前端装饰性计时器。
-  - 推荐的数据结构是：
-    - `started_at`
-    - `ended_at`
-    - `duration_ms`
-    - `source_event_id / alert_id / suggestion_id`
-  - 但要诚实说明：当前并不是每个阶段都已经暴露了足够的审计时间戳，所以一开始只能先展示“已知边界时间”，再逐步补全更真实的阶段耗时模型。
+  - 现在生命周期卡片下方已经统一预留了 action/timing band。
+  - 只有真正有边界时间的阶段显示实际耗时；没有真实开始/结束语义的阶段，用同一块区域显示状态、门控语义或保留边界。
+  - 这样可以保持风格一致，同时避免把 `FortiGate`、`Remediation Loop` 这类环节伪装成“有精确耗时”的服务调用。
 - 资源影响
   - 如果只推送“阶段转移”和“对操作员有意义的事件”，资源消耗**不会明显上升**。
-  - 相反，它甚至可能比现在每 `5` 秒从 JSONL 全量重建 snapshot 更省网关 I/O。
+  - 相反，它通常会在保持带宽/I/O可控的同时，显著降低前端感知延迟，因为界面只重绘变化的区域。
   - 真正不建议的是把所有 raw facts 直接高频推给前端。
   - 更合理的目标是：高吞吐数据继续留在 Kafka/runtime files，前端只接收带时序元数据的阶段 delta。
 

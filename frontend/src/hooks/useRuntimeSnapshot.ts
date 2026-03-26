@@ -1,6 +1,10 @@
 import { startTransition, useEffect, useState } from 'react'
 import { runtimeSnapshot as fallbackSnapshot } from '../data/runtimeModel'
-import type { RuntimeSnapshot } from '../types'
+import type {
+  RuntimeSnapshot,
+  RuntimeStreamDelta,
+  RuntimeStreamEnvelope,
+} from '../types'
 
 export type RuntimeConnectionState =
   | 'connecting'
@@ -13,6 +17,7 @@ const STREAM_ENDPOINT = '/api/runtime/stream'
 
 export function useRuntimeSnapshot() {
   const [snapshot, setSnapshot] = useState<RuntimeSnapshot>(fallbackSnapshot)
+  const [latestDelta, setLatestDelta] = useState<RuntimeStreamDelta | null>(null)
   const [connectionState, setConnectionState] =
     useState<RuntimeConnectionState>('connecting')
 
@@ -56,13 +61,28 @@ export function useRuntimeSnapshot() {
       )
       eventSource = new EventSource(STREAM_ENDPOINT)
 
-      eventSource.onmessage = (event) => {
+      const handleEnvelope = (
+        event: MessageEvent<string>,
+        expectedType: RuntimeStreamEnvelope['type'],
+      ) => {
         try {
-          const nextSnapshot = JSON.parse(event.data) as RuntimeSnapshot
+          const envelope = JSON.parse(event.data) as RuntimeStreamEnvelope
+          if (envelope.type !== expectedType) {
+            return
+          }
           if (!isMounted) {
             return
           }
-          startTransition(() => setSnapshot(nextSnapshot))
+          if (envelope.type === 'heartbeat') {
+            setConnectionState('live')
+            return
+          }
+          startTransition(() => setSnapshot(envelope.snapshot))
+          if (envelope.type === 'delta') {
+            setLatestDelta(envelope.delta)
+          } else {
+            setLatestDelta(null)
+          }
           setConnectionState('live')
         } catch {
           if (isMounted) {
@@ -70,6 +90,16 @@ export function useRuntimeSnapshot() {
           }
         }
       }
+
+      eventSource.addEventListener('snapshot', (event) =>
+        handleEnvelope(event as MessageEvent<string>, 'snapshot'),
+      )
+      eventSource.addEventListener('delta', (event) =>
+        handleEnvelope(event as MessageEvent<string>, 'delta'),
+      )
+      eventSource.addEventListener('heartbeat', (event) =>
+        handleEnvelope(event as MessageEvent<string>, 'heartbeat'),
+      )
 
       eventSource.onerror = () => {
         eventSource?.close()
@@ -94,5 +124,5 @@ export function useRuntimeSnapshot() {
     }
   }, [])
 
-  return { snapshot, connectionState }
+  return { snapshot, latestDelta, connectionState }
 }

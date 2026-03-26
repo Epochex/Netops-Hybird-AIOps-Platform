@@ -264,7 +264,7 @@
 
 .stage-segment {
   display: grid;
-  grid-template-rows: minmax(164px, auto) 22px;
+  grid-template-rows: minmax(164px, auto) minmax(52px, auto) 22px;
   gap: 0.55rem;
 }
 
@@ -398,6 +398,77 @@
 }
 
 .stage-card.pulse-1 {
+  animation: stagePulseB 1.2s ease-out;
+}
+
+.stage-action {
+  min-height: 3.25rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 0.38rem;
+  padding: 0.48rem 0.58rem 0.5rem;
+  border: 1px solid var(--line-soft);
+  background: rgba(6, 10, 14, 0.9);
+  transition: border-color 140ms ease;
+}
+
+.stage-action.state-complete,
+.stage-action.state-active {
+  border-color: rgba(105, 249, 255, 0.24);
+}
+
+.stage-action.state-watch {
+  border-color: rgba(255, 137, 61, 0.28);
+}
+
+.stage-action.state-planned {
+  border-style: dashed;
+  opacity: 0.82;
+}
+
+.stage-action-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.stage-action-head span {
+  color: var(--text-dim);
+  font: 500 0.54rem/1 var(--font-mono);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.stage-action-head strong {
+  color: var(--text-main);
+  font: 600 0.68rem/1 var(--font-mono);
+}
+
+.stage-action.mode-duration .stage-action-head strong {
+  color: var(--signal-cyan);
+}
+
+.stage-action.mode-gate .stage-action-head strong {
+  color: var(--signal-alert);
+}
+
+.stage-action.mode-reserved .stage-action-head strong {
+  color: var(--text-dim);
+}
+
+.stage-action p {
+  margin: 0;
+  color: var(--text-subtle);
+  font: 400 0.68rem/1.35 var(--font-body);
+}
+
+.stage-action.pulse-0 {
+  animation: stagePulseA 1.2s ease-out;
+}
+
+.stage-action.pulse-1 {
   animation: stagePulseB 1.2s ease-out;
 }
 

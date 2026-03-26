@@ -1,17 +1,33 @@
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 import type {
   FeedEvent,
   RuntimeSnapshot,
+  RuntimeStreamDelta,
   StageNode,
+  StageTelemetry,
   StrategyControl,
   SuggestionRecord,
 } from '../types'
-import { formatMaybeTimestamp, timestampTooltip } from '../utils/time'
+import {
+  formatDurationMs,
+  formatMaybeTimestamp,
+  timestampTooltip,
+} from '../utils/time'
 
 interface LiveFlowConsoleProps {
   snapshot: RuntimeSnapshot
+  latestDelta: RuntimeStreamDelta | null
   selectedSuggestion: SuggestionRecord
   onSelectSuggestion: (suggestionId: string) => void
+}
+
+interface LifecycleAction {
+  mode: StageTelemetry['mode']
+  state: StageTelemetry['state']
+  label: string
+  value: string
+  secondary: string
+  stamp?: string
 }
 
 interface LifecycleBlock {
@@ -20,14 +36,21 @@ interface LifecycleBlock {
   subtitle: string
   status: StageNode['status']
   metrics: Array<{ label: string; value: string }>
+  action: LifecycleAction
 }
 
 function controlValue(controls: StrategyControl[], label: string) {
   return controls.find((control) => control.label === label)?.currentValue ?? 'n/a'
 }
 
-function buildLifecycle(snapshot: RuntimeSnapshot): LifecycleBlock[] {
+function buildLifecycle(
+  snapshot: RuntimeSnapshot,
+  linkedSuggestion: SuggestionRecord,
+): LifecycleBlock[] {
   const stageLookup = new Map(snapshot.stageNodes.map((node) => [node.id, node]))
+  const telemetryLookup = new Map(
+    (linkedSuggestion.stageTelemetry ?? []).map((item) => [item.stageId, item]),
+  )
   const clusterTarget = Number.parseInt(
     controlValue(snapshot.strategyControls, 'AIOPS_CLUSTER_MIN_ALERTS'),
     10,
@@ -87,13 +110,104 @@ function buildLifecycle(snapshot: RuntimeSnapshot): LifecycleBlock[] {
         value: `${clusterWindow}s`,
       },
     ],
+    action: stageAction(
+      telemetryLookup.get('cluster-window'),
+      clusterStatus,
+      'cluster gate',
+      `${clusterProgress}/${Number.isFinite(clusterTarget) ? clusterTarget : 3} in ${clusterWindow}s`,
+    ),
   }
 
   return [
-    ...orderedStages.slice(0, 6),
+    ...orderedStages.slice(0, 6).map((stage) => ({
+      ...stage,
+      action: stageAction(
+        telemetryLookup.get(stage.id),
+        stage.status,
+        stage.subtitle,
+        stage.metrics[0]?.value ?? 'steady',
+      ),
+    })),
     clusterBlock,
-    ...orderedStages.slice(6),
+    ...orderedStages.slice(6).map((stage) => ({
+      ...stage,
+      action: stageAction(
+        telemetryLookup.get(stage.id),
+        stage.status,
+        stage.subtitle,
+        stage.metrics[0]?.value ?? 'steady',
+      ),
+    })),
   ]
+}
+
+function stageAction(
+  telemetry: StageTelemetry | undefined,
+  status: StageNode['status'],
+  fallbackLabel: string,
+  fallbackValue: string,
+): LifecycleAction {
+  if (!telemetry) {
+    return {
+      mode: status === 'planned' ? 'reserved' : 'status',
+      state: status === 'planned' ? 'planned' : 'steady',
+      label: fallbackLabel,
+      value: fallbackValue,
+      secondary: status === 'planned' ? 'not wired' : 'waiting for live delta',
+    }
+  }
+
+  if (telemetry.mode === 'duration') {
+    return {
+      mode: telemetry.mode,
+      state: telemetry.state,
+      label: telemetry.label,
+      value: formatDurationMs(telemetry.durationMs),
+      secondary: telemetry.startedAt && telemetry.endedAt
+        ? `${formatMaybeTimestamp(telemetry.startedAt, 'time')} -> ${formatMaybeTimestamp(telemetry.endedAt, 'time')}`
+        : 'timing unavailable',
+      stamp: telemetry.endedAt,
+    }
+  }
+
+  if (telemetry.mode === 'timestamp') {
+    return {
+      mode: telemetry.mode,
+      state: telemetry.state,
+      label: telemetry.label,
+      value: formatMaybeTimestamp(telemetry.endedAt, 'time'),
+      secondary: telemetry.endedAt ? 'last completed stage event' : 'waiting for event',
+      stamp: telemetry.endedAt,
+    }
+  }
+
+  if (telemetry.mode === 'gate') {
+    return {
+      mode: telemetry.mode,
+      state: telemetry.state,
+      label: telemetry.label,
+      value: telemetry.value ?? fallbackValue,
+      secondary:
+        telemetry.durationMs !== null && telemetry.durationMs !== undefined
+          ? `span ${formatDurationMs(telemetry.durationMs)}`
+          : 'window is semantic, not a service call',
+      stamp: telemetry.endedAt,
+    }
+  }
+
+  return {
+    mode: telemetry.mode,
+    state: telemetry.state,
+    label: telemetry.label,
+    value: telemetry.value ?? fallbackValue,
+    secondary:
+      telemetry.mode === 'reserved'
+        ? 'control boundary only'
+        : telemetry.endedAt
+          ? `updated ${formatMaybeTimestamp(telemetry.endedAt, 'time')}`
+          : 'state-driven, not duration-driven',
+    stamp: telemetry.endedAt,
+  }
 }
 
 function pulseStageIds(kind: FeedEvent['kind'], scope: SuggestionRecord['scope']) {
@@ -108,6 +222,24 @@ function pulseStageIds(kind: FeedEvent['kind'], scope: SuggestionRecord['scope']
   return scope === 'cluster'
     ? ['cluster-window', 'aiops-agent', 'suggestions-topic', 'remediation']
     : ['aiops-agent', 'suggestions-topic', 'remediation']
+}
+
+function pulseKindForDelta(
+  kind: RuntimeStreamDelta['kind'] | FeedEvent['kind'] | undefined,
+): FeedEvent['kind'] {
+  if (kind === 'raw' || kind === 'alert') {
+    return kind
+  }
+  return 'suggestion'
+}
+
+function toneForDelta(
+  kind: RuntimeStreamDelta['kind'] | FeedEvent['kind'] | undefined,
+) {
+  if (kind === 'system') {
+    return 'live'
+  }
+  return pulseKindForDelta(kind)
 }
 
 function currentStageIndex(blocks: LifecycleBlock[], kind: FeedEvent['kind']) {
@@ -219,21 +351,12 @@ function eventSummary(event: FeedEvent, linkedSuggestion: SuggestionRecord) {
 
 export function LiveFlowConsole({
   snapshot,
+  latestDelta,
   selectedSuggestion,
   onSelectSuggestion,
 }: LiveFlowConsoleProps) {
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null)
 
-  const pulseKind = snapshot.feed[0]?.kind ?? 'suggestion'
-  const lifecycle = useMemo(() => buildLifecycle(snapshot), [snapshot])
-  const pulseIds = useMemo(
-    () => pulseStageIds(pulseKind, selectedSuggestion.scope),
-    [pulseKind, selectedSuggestion.scope],
-  )
-  const leadEventId =
-    snapshot.feed[0]?.id ??
-    snapshot.runtime.latestSuggestionTs ??
-    snapshot.runtime.latestAlertTs
   const queueEvents = snapshot.feed.slice(0, 10)
   const compactMetrics = snapshot.overviewMetrics.filter((metric) =>
     ['raw-freshness', 'backlog', 'current-day-volume', 'closure'].includes(
@@ -248,7 +371,22 @@ export function LiveFlowConsole({
     snapshot.suggestions,
     selectedSuggestion,
   )
-  const activeStageIndex = currentStageIndex(lifecycle, pulseKind)
+  const lifecycle = buildLifecycle(snapshot, linkedSuggestion)
+  const pulseKind = pulseKindForDelta(latestDelta?.kind ?? snapshot.feed[0]?.kind)
+  const pulseTone = toneForDelta(latestDelta?.kind ?? snapshot.feed[0]?.kind)
+  const pulseIds =
+    latestDelta?.stageIds.length
+      ? latestDelta.stageIds
+      : pulseStageIds(pulseKind, linkedSuggestion.scope)
+  const leadEventId =
+    latestDelta?.id ??
+    snapshot.feed[0]?.id ??
+    snapshot.runtime.latestSuggestionTs ??
+    snapshot.runtime.latestAlertTs
+  const activeStageIndex = currentStageIndex(
+    lifecycle,
+    activeEvent?.kind ?? pulseKind,
+  )
   const activeSummary = activeEvent
     ? eventSummary(activeEvent, linkedSuggestion)
     : null
@@ -266,7 +404,7 @@ export function LiveFlowConsole({
           </div>
           <div className="annotation-stack">
             <span className="section-kicker">directional runtime flow</span>
-            <span className={`signal-chip tone-${pulseKind}`}>{pulseKind}</span>
+            <span className={`signal-chip tone-${pulseTone}`}>{pulseTone}</span>
           </div>
         </div>
 
@@ -302,6 +440,17 @@ export function LiveFlowConsole({
                     ))}
                   </ul>
                 </article>
+
+                <div
+                  className={`stage-action mode-${block.action.mode} state-${block.action.state} ${pulseClass}`}
+                  title={timestampTooltip(block.action.stamp)}
+                >
+                  <div className="stage-action-head">
+                    <span>{block.action.label}</span>
+                    <strong>{block.action.value}</strong>
+                  </div>
+                  <p>{block.action.secondary}</p>
+                </div>
 
                 {index < lifecycle.length - 1 ? (
                   <div
@@ -393,7 +542,7 @@ export function LiveFlowConsole({
           </div>
 
           <ol className="timeline-list">
-            {snapshot.timeline.map((step, index) => (
+            {(linkedSuggestion.timeline ?? snapshot.timeline).map((step, index) => (
               <li
                 key={`${linkedSuggestion.id}-${step.id}`}
                 className={`timeline-item ${index <= activeStageIndex ? 'is-active' : ''}`}
@@ -425,7 +574,7 @@ export function LiveFlowConsole({
 
           <div className="event-stack">
             {queueEvents.map((event, index) => {
-              const isLead = index === 0
+              const isLead = latestDelta?.feedIds.includes(event.id) ?? index === 0
               const isActive = activeEvent?.id === event.id
 
               return (
