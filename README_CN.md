@@ -117,36 +117,27 @@ flowchart LR
   - remediation 执行通道
 - `Remediation Loop` 现在被故意画成一个“保留的控制边界”，而不是一个真实会写回生产环境的执行阶段。后续如果接审批/执行，也必须与当前只读控制台明确隔离。
 
-### Live Event Lifecycle（当前 10 阶段运维视图）
+### Live Event Lifecycle（当前动作视图）
 
-- `01 FortiGate`
-  - 源设备日志平面，是整条链路最上游的真实流量/日志来源。
-- `02 edge/fortigate-ingest`
-  - 把原始 FortiGate syslog 解析成结构化 JSONL facts，同时保留 checkpoint / replay 语义，再把整理后的 edge facts 交给下一阶段。
-- `03 edge-forwarder`
-  - 读取 edge 侧的解析结果并转发到 core 侧 Kafka raw topic。它是 edge 文件态运行时和 core 流式数据面的桥梁。
-- `04 netops.facts.raw.v1`
-  - 实时 fact topic，是 core 侧第一次看见事实事件的地方，也是确定性告警链路的直接上游。
-- `05 core-correlator`
-  - 执行质量门禁、去重和确定性规则。当前系统真正做“发不发 alert”判断的地方就在这里。
-- `06 netops.alerts.v1`
-  - Alert bus。它把已经发出的告警交给后续持久化和 AIOps 增强，是“确定性检测”和“建议生成”之间的交接点。
-- `07 cluster window`
-  - 基于已发出的 alerts 做 same-key 聚合门控。这是 AIOps 路径内部的一个逻辑阶段，不是独立部署服务；它决定重复告警是否还要形成 `cluster-scope` suggestion。
-- `08 core-aiops-agent`
-  - 构建 evidence bundle、从 ClickHouse 查询近期历史、调用 provider。当前默认还是 template 推理，未来这里就是远端/本地 LLM 推理的挂接点。
-- `09 netops.aiops.suggestions.v1`
-  - 结构化建议 topic，是当前 AIOps 路径面向操作员的输出，也是前端 evidence drawer / event queue 的直接上游。
-- `10 Remediation Loop`
-  - 预留的审批/执行/反馈边界。它现在存在的意义是告诉用户“系统未来会在这里进入执行闭环”，但当前还没有接成真实运行阶段。
+- 首页的 `Live Event Lifecycle` 不再先铺 10 个技术模块，而是先按“对操作员有意义的动作阶段”来组织；完整模块 / topic 图仍保留在 `Pipeline Topology`。
+- `01 Source Signal`
+  - 真实的 FortiGate 设备日志进入平台。这里强调的是“源头已经活着”，而不是把源设备伪装成一个带精确耗时的服务调用。
+- `02 Edge Parse + Handoff`
+  - 把 `fortigate-ingest`、`edge-forwarder`、`netops.facts.raw.v1` 收成一个动作阶段：解析、保留 replay/checkpoint 语义、再把 fact 送进 raw stream。
+- `03 Deterministic Alert`
+  - 对应 `core-correlator` 和 `netops.alerts.v1`。这是系统第一次真正做“这个事件是否跨过规则门槛”的判断。
+- `04 Cluster Gate`
+  - 对应 same-key 聚合窗口。它回答的是“这条路径离 cluster-scope 还差多远”，而不是先把用户扔进内部实现细节。
+- `05 AIOps Suggestion`
+  - 对应 `core-aiops-agent` 和 `netops.aiops.suggestions.v1`。在这里把证据装配好、执行 provider 逻辑，并形成结构化建议。
+- `06 Remediation Boundary`
+  - 审批 / 执行 / 反馈边界继续保持可见，但当前仍是只读保留面，没有接成真实生产回写通道。
 
-阶段之间的转承关系：
+为什么首页更适合动作视图：
 
-- `01 -> 04` 是接入/传输路径。
-- `05 -> 06` 是真实告警决策路径。
-- `06 -> 09` 是证据增强/建议输出路径。
-- `07` 是 alert 重复聚合到 cluster-scope suggestion 的逻辑门。
-- `10` 位于 suggestion 之后，但当前仍是可见边界而不是活动闭环。
+- 第一次使用平台的人，不需要先理解每个内部 topic / service 名称，也能知道系统正在干什么。
+- 计时条更诚实：只有真正有开始/结束边界的阶段显示耗时；门控阶段显示进度；源头和边界阶段只显示 live state，不伪造 latency。
+- 技术上那 10 个模块依然存在，但它们更适合放在拓扑页，而不是作为首页第一视觉负担。
 
 ### 前端实时更新模型
 

@@ -118,36 +118,27 @@ flowchart LR
   - remediation execution channels
 - `Remediation Loop` is intentionally rendered as a reserved control boundary rather than as a live write-back stage. Any future approval/execution path must remain explicitly separated from the current read-only console.
 
-### Live Event Lifecycle (Current 10-Stage Operator View)
+### Live Event Lifecycle (Current Action View)
 
-- `01 FortiGate`
-  - Source device log plane. This is the real traffic/log origin and the upstream source of all later runtime states.
-- `02 edge/fortigate-ingest`
-  - Parses raw FortiGate syslog into structured JSONL facts, keeps checkpoint/replay semantics, and hands clean edge facts to the next stage.
-- `03 edge-forwarder`
-  - Reads parsed edge facts and forwards them into the core-side Kafka raw topic. This is the transport bridge between edge file-backed runtime and the core streaming plane.
-- `04 netops.facts.raw.v1`
-  - Real-time fact topic. It is the first core-visible event stream and the immediate upstream input of deterministic alerting.
-- `05 core-correlator`
-  - Applies quality gates, dedup policy, and deterministic rules. This is where the current system still makes its actual alert/no-alert decision.
-- `06 netops.alerts.v1`
-  - Alert bus. It carries emitted alerts downstream to persistence and AIOps enrichment. It is the handoff point between deterministic detection and suggestion generation.
-- `07 cluster window`
-  - Same-key aggregation gate over emitted alerts. This is a logical stage inside the AIOps path rather than a separate deployed service; it decides whether repeated alerts should also become `cluster-scope` suggestions.
-- `08 core-aiops-agent`
-  - Builds evidence bundles, looks up recent history from ClickHouse, and invokes the configured provider. Today this means template inference by default; later it is the attachment point for remote/local LLM inference.
-- `09 netops.aiops.suggestions.v1`
-  - Structured suggestion topic. It is the operator-facing output of the current AIOps path and the immediate upstream source of the frontend evidence drawer/event queue.
-- `10 Remediation Loop`
-  - Reserved approval/execution/feedback boundary. It is shown so the user can see where the system would hand over into execution later, but it is not yet wired as a real runtime stage.
+- The live console no longer leads with a wall of ten technical modules. Its primary lifecycle view is now grouped into the operator-meaningful actions below; the full module/topic graph remains on `Pipeline Topology`.
+- `01 Source Signal`
+  - A real FortiGate device log has entered the platform. This makes the ingress plane legible without pretending the source itself is a timed service hop.
+- `02 Edge Parse + Handoff`
+  - `fortigate-ingest`, `edge-forwarder`, and `netops.facts.raw.v1` are collapsed into one action phase: normalize the log, preserve replay/checkpoint semantics, and hand the fact into the raw stream.
+- `03 Deterministic Alert`
+  - `core-correlator` plus `netops.alerts.v1`. This is the first true decision point: the system either crosses the rule threshold or it does not.
+- `04 Cluster Gate`
+  - The same-key aggregation window. It answers “how close is this path to becoming cluster-scope?” rather than exposing the user to a raw implementation detail first.
+- `05 AIOps Suggestion`
+  - `core-aiops-agent` plus `netops.aiops.suggestions.v1`. Evidence is assembled, provider logic runs, and structured operator guidance is emitted.
+- `06 Remediation Boundary`
+  - Approval / execution / feedback remains visible as the next boundary, but is still intentionally read-only and not wired into production write-back.
 
-Relationship between stages:
+Why this action view is preferable on the homepage:
 
-- `01 -> 04` is the ingest/transport path.
-- `05 -> 06` is the real alert decision path.
-- `06 -> 09` is the evidence/suggestion path.
-- `07` is a logical gate between alert repetition and cluster-scope suggestion emission.
-- `10` is downstream of suggestion generation but remains a visible boundary rather than an active control loop.
+- First-time users can understand what the platform is doing without already knowing every internal topic or service name.
+- Timing bands stay honest: only phases with meaningful start/end semantics show elapsed time; gate phases show progress; source/boundary phases show live state rather than fake latency numbers.
+- The technical ten-module decomposition still exists, but it belongs on the topology view rather than as the first thing operators must decode.
 
 ### Realtime UI Update Model
 

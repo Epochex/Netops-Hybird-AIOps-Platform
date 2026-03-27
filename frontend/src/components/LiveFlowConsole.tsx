@@ -21,34 +21,40 @@ interface LiveFlowConsoleProps {
   onSelectSuggestion: (suggestionId: string) => void
 }
 
-interface LifecycleAction {
+interface LifecycleBand {
   mode: StageTelemetry['mode']
   state: StageTelemetry['state']
   label: string
   value: string
-  caption?: string
+  detail: string
   stamp?: string
   meter: number
   tone: 'raw' | 'alert' | 'suggestion' | 'neutral' | 'planned'
 }
 
-interface LifecycleBlock {
+interface LifecyclePhase {
   id: string
   title: string
-  subtitle: string
+  purpose: string
+  systems: string
   status: StageNode['status']
-  metrics: Array<{ label: string; value: string }>
-  action: LifecycleAction
+  stageIds: string[]
+  facts: string[]
+  band: LifecycleBand
 }
 
 function controlValue(controls: StrategyControl[], label: string) {
   return controls.find((control) => control.label === label)?.currentValue ?? 'n/a'
 }
 
+function stageMetricValue(node: StageNode | undefined, label: string) {
+  return node?.metrics.find((metric) => metric.label === label)?.value ?? 'n/a'
+}
+
 function buildLifecycle(
   snapshot: RuntimeSnapshot,
   linkedSuggestion: SuggestionRecord,
-): LifecycleBlock[] {
+): LifecyclePhase[] {
   const stageLookup = new Map(snapshot.stageNodes.map((node) => [node.id, node]))
   const telemetryLookup = new Map(
     (linkedSuggestion.stageTelemetry ?? []).map((item) => [item.stageId, item]),
@@ -57,224 +63,212 @@ function buildLifecycle(
     controlValue(snapshot.strategyControls, 'AIOPS_CLUSTER_MIN_ALERTS'),
     10,
   )
-  const clusterWindow = controlValue(
-    snapshot.strategyControls,
-    'AIOPS_CLUSTER_WINDOW_SEC',
+  const clusterWindow = Number.parseInt(
+    controlValue(snapshot.strategyControls, 'AIOPS_CLUSTER_WINDOW_SEC'),
+    10,
   )
+  const safeClusterTarget = Number.isFinite(clusterTarget) ? clusterTarget : 3
+  const safeClusterWindow = Number.isFinite(clusterWindow) ? clusterWindow : 600
   const clusterProgress = Math.max(
     0,
     ...snapshot.clusterWatch.map((item) => item.progress),
   )
-  const clusterLive = snapshot.suggestions.some(
-    (suggestion) => suggestion.scope === 'cluster',
-  )
-  const clusterStatus: StageNode['status'] = clusterLive
-    ? 'flowing'
-    : clusterProgress > 0
-      ? 'watch'
-      : 'steady'
-
-  const sourceIds = [
-    'fortigate',
-    'ingest',
-    'forwarder',
-    'raw-topic',
-    'correlator',
-    'alerts-topic',
-    'aiops-agent',
-    'suggestions-topic',
-    'remediation',
-  ]
-
-  const orderedStages = sourceIds
-    .map((id) => stageLookup.get(id))
-    .filter((stage): stage is StageNode => Boolean(stage))
-    .map((stage) => ({
-      id: stage.id,
-      title: stage.title,
-      subtitle: stage.subtitle,
-      status: stage.status,
-      metrics: stage.metrics.slice(0, 2),
-    }))
-
-  const clusterBlock: LifecycleBlock = {
-    id: 'cluster-window',
-    title: 'cluster window',
-    subtitle: 'same-key aggregation gate',
-    status: clusterStatus,
-    metrics: [
-      {
-        label: 'progress',
-        value: `${clusterProgress}/${Number.isFinite(clusterTarget) ? clusterTarget : 3}`,
-      },
-      {
-        label: 'window',
-        value: `${clusterWindow}s`,
-      },
-    ],
-    action: stageAction(
-      'cluster-window',
-      telemetryLookup.get('cluster-window'),
-      clusterStatus,
-      'cluster window',
-      `${clusterProgress}/${Number.isFinite(clusterTarget) ? clusterTarget : 3}`,
-    ),
-  }
+  const clusterRemaining = Math.max(0, safeClusterTarget - clusterProgress)
+  const fortigate = stageLookup.get('fortigate')
+  const ingest = stageLookup.get('ingest')
+  const forwarder = stageLookup.get('forwarder')
+  const rawTopic = stageLookup.get('raw-topic')
+  const correlator = stageLookup.get('correlator')
+  const alertsTopic = stageLookup.get('alerts-topic')
+  const aiopsAgent = stageLookup.get('aiops-agent')
+  const suggestionsTopic = stageLookup.get('suggestions-topic')
+  const remediation = stageLookup.get('remediation')
+  const sourceTs =
+    telemetryLookup.get('raw-topic')?.endedAt ??
+    telemetryLookup.get('ingest')?.endedAt ??
+    telemetryLookup.get('fortigate')?.endedAt
+  const handoffTs =
+    telemetryLookup.get('raw-topic')?.endedAt ??
+    telemetryLookup.get('forwarder')?.endedAt ??
+    telemetryLookup.get('ingest')?.endedAt
+  const alertTs =
+    telemetryLookup.get('alerts-topic')?.endedAt ??
+    telemetryLookup.get('correlator')?.endedAt
+  const suggestionTs =
+    telemetryLookup.get('suggestions-topic')?.endedAt ??
+    telemetryLookup.get('aiops-agent')?.endedAt
+  const clusterTelemetry = telemetryLookup.get('cluster-window')
+  const clusterState: StageNode['status'] =
+    linkedSuggestion.scope === 'cluster'
+      ? 'flowing'
+      : clusterProgress > 0
+        ? 'watch'
+        : 'steady'
 
   return [
-    ...orderedStages.slice(0, 6).map((stage) => ({
-      ...stage,
-      action: stageAction(
-        stage.id,
-        telemetryLookup.get(stage.id),
-        stage.status,
-        stage.title,
-        stage.metrics[0]?.value ?? 'steady',
-      ),
-    })),
-    clusterBlock,
-    ...orderedStages.slice(6).map((stage) => ({
-      ...stage,
-      action: stageAction(
-        stage.id,
-        telemetryLookup.get(stage.id),
-        stage.status,
-        stage.title,
-        stage.metrics[0]?.value ?? 'steady',
-      ),
-    })),
+    {
+      id: 'source-signal',
+      title: 'Source Signal',
+      purpose: 'A real device log has entered the platform.',
+      systems: 'FortiGate',
+      status: fortigate?.status ?? 'steady',
+      stageIds: ['fortigate'],
+      facts: [
+        stageMetricValue(fortigate, 'mode'),
+        stageMetricValue(fortigate, 'signal'),
+      ],
+      band: {
+        mode: 'timestamp',
+        state: 'active',
+        label: 'seen',
+        value: sourceTs ? formatMaybeTimestamp(sourceTs, 'time') : 'live',
+        detail: 'source plane stays hot until a new raw fact arrives',
+        stamp: sourceTs,
+        meter: 100,
+        tone: 'raw',
+      },
+    },
+    {
+      id: 'edge-handoff',
+      title: 'Edge Parse + Handoff',
+      purpose: 'The edge normalizes, checkpoints, and hands the fact to the raw stream.',
+      systems: 'fortigate-ingest -> edge-forwarder -> netops.facts.raw.v1',
+      status:
+        rawTopic?.status === 'flowing' || ingest?.status === 'flowing'
+          ? 'flowing'
+          : 'steady',
+      stageIds: ['ingest', 'forwarder', 'raw-topic'],
+      facts: [
+        `parsed ${stageMetricValue(ingest, 'parsed')}`,
+        `freshness ${stageMetricValue(rawTopic, 'freshness')}`,
+        `drop local deny ${stageMetricValue(forwarder, 'drop local deny')}`,
+      ],
+      band: {
+        mode: 'timestamp',
+        state: 'complete',
+        label: 'handoff',
+        value: handoffTs ? formatMaybeTimestamp(handoffTs, 'time') : 'ready',
+        detail: `backlog ${stageMetricValue(ingest, 'backlog')} · raw topic ready`,
+        stamp: handoffTs,
+        meter: 100,
+        tone: 'raw',
+      },
+    },
+    {
+      id: 'deterministic-alert',
+      title: 'Deterministic Alert',
+      purpose: 'The correlator decides whether the event crosses the rule threshold.',
+      systems: 'core-correlator -> netops.alerts.v1',
+      status:
+        alertsTopic?.status === 'flowing' || correlator?.status === 'flowing'
+          ? 'flowing'
+          : 'steady',
+      stageIds: ['correlator', 'alerts-topic'],
+      facts: [
+        `threshold ${stageMetricValue(correlator, 'deny threshold')}`,
+        `latest ${stageMetricValue(alertsTopic, 'latest')}`,
+      ],
+      band: {
+        mode: telemetryLookup.get('correlator')?.mode ?? 'duration',
+        state: telemetryLookup.get('correlator')?.state ?? 'steady',
+        label: 'elapsed',
+        value: formatDurationMs(telemetryLookup.get('correlator')?.durationMs),
+        detail:
+          alertTs && sourceTs
+            ? `${formatMaybeTimestamp(sourceTs, 'time')} -> ${formatMaybeTimestamp(alertTs, 'time')}`
+            : 'source fact to alert emission',
+        stamp: alertTs,
+        meter: 100,
+        tone: 'alert',
+      },
+    },
+    {
+      id: 'cluster-gate',
+      title: 'Cluster Gate',
+      purpose: 'Repeated same-key alerts are counted until they become cluster-legible.',
+      systems: 'same-key aggregation window',
+      status: clusterState,
+      stageIds: ['cluster-window'],
+      facts: [
+        `${clusterProgress}/${safeClusterTarget} in ${safeClusterWindow}s`,
+        linkedSuggestion.scope === 'cluster'
+          ? 'cluster path already reached'
+          : `${clusterRemaining} more needed for cluster trigger`,
+      ],
+      band: {
+        mode: 'gate',
+        state: clusterTelemetry?.state ?? (clusterProgress > 0 ? 'watch' : 'steady'),
+        label: 'progress',
+        value: `${clusterProgress}/${safeClusterTarget}`,
+        detail:
+          linkedSuggestion.scope === 'cluster'
+            ? `cluster gate reached inside ${safeClusterWindow}s`
+            : `${clusterRemaining} more matching alert(s) needed inside ${safeClusterWindow}s`,
+        stamp: clusterTelemetry?.endedAt,
+        meter:
+          safeClusterTarget > 0
+            ? Math.max(10, Math.min(100, (clusterProgress / safeClusterTarget) * 100))
+            : 0,
+        tone: 'alert',
+      },
+    },
+    {
+      id: 'suggestion-emission',
+      title: 'AIOps Suggestion',
+      purpose: 'Evidence is bundled into structured operator guidance.',
+      systems: 'core-aiops-agent -> netops.aiops.suggestions.v1',
+      status:
+        suggestionsTopic?.status === 'flowing' || aiopsAgent?.status === 'flowing'
+          ? 'flowing'
+          : 'steady',
+      stageIds: ['aiops-agent', 'suggestions-topic'],
+      facts: [
+        `${linkedSuggestion.scope}-scope via ${linkedSuggestion.context.provider}`,
+        stageMetricValue(suggestionsTopic, 'current day'),
+      ],
+      band: {
+        mode: telemetryLookup.get('aiops-agent')?.mode ?? 'duration',
+        state: telemetryLookup.get('aiops-agent')?.state ?? 'steady',
+        label: 'elapsed',
+        value: formatDurationMs(telemetryLookup.get('aiops-agent')?.durationMs),
+        detail:
+          suggestionTs && alertTs
+            ? `${formatMaybeTimestamp(alertTs, 'time')} -> ${formatMaybeTimestamp(suggestionTs, 'time')}`
+            : 'alert evidence to suggestion emission',
+        stamp: suggestionTs,
+        meter: 100,
+        tone: 'suggestion',
+      },
+    },
+    {
+      id: 'remediation-boundary',
+      title: 'Remediation Boundary',
+      purpose: 'Approval, execution, and feedback stay visible as the next control surface.',
+      systems: 'approval -> execution -> feedback',
+      status: remediation?.status ?? 'planned',
+      stageIds: ['remediation'],
+      facts: [
+        stageMetricValue(remediation, 'status'),
+        stageMetricValue(remediation, 'feedback'),
+      ],
+      band: {
+        mode: 'reserved',
+        state: 'planned',
+        label: 'boundary',
+        value: 'manual',
+        detail: 'reserved control point · execution path not wired',
+        meter: 10,
+        tone: 'planned',
+      },
+    },
   ]
 }
 
-function stageAction(
-  stageId: string,
-  telemetry: StageTelemetry | undefined,
-  status: StageNode['status'],
-  fallbackLabel: string,
-  fallbackValue: string,
-): LifecycleAction {
-  if (!telemetry) {
-    return fallbackStageAction(stageId, status, fallbackLabel)
-  }
-
-  if (telemetry.mode === 'duration') {
-    return {
-      mode: telemetry.mode,
-      state: telemetry.state,
-      label: telemetry.label,
-      value: formatDurationMs(telemetry.durationMs),
-      caption: telemetry.startedAt && telemetry.endedAt
-        ? `${formatMaybeTimestamp(telemetry.startedAt, 'time')} -> ${formatMaybeTimestamp(telemetry.endedAt, 'time')}`
-        : 'timing unavailable',
-      stamp: telemetry.endedAt,
-      meter: 100,
-      tone: telemetry.label.includes('alert') ? 'alert' : 'suggestion',
-    }
-  }
-
-  if (telemetry.mode === 'timestamp') {
-    return {
-      mode: telemetry.mode,
-      state: telemetry.state,
-      label: telemetry.label,
-      value: formatMaybeTimestamp(telemetry.endedAt, 'time'),
-      caption: stageId === 'raw-topic' ? 'latest raw fact' : 'last completed event',
-      stamp: telemetry.endedAt,
-      meter: 82,
-      tone:
-        stageId === 'raw-topic' || stageId === 'ingest'
-          ? 'raw'
-          : stageId === 'alerts-topic'
-            ? 'alert'
-            : 'suggestion',
-    }
-  }
-
-  if (telemetry.mode === 'gate') {
-    const parts = (telemetry.value ?? '0/1').split(' in ')
-    const ratio = parts[0] ?? telemetry.value ?? fallbackValue
-    const [progressText, targetText] = ratio.split('/')
-    const progress = Number.parseInt(progressText ?? '0', 10)
-    const target = Number.parseInt(targetText ?? '1', 10)
-    return {
-      mode: telemetry.mode,
-      state: telemetry.state,
-      label: telemetry.label,
-      value: ratio,
-      caption:
-        telemetry.durationMs !== null && telemetry.durationMs !== undefined
-          ? `window ${parts[1] ?? ''} · span ${formatDurationMs(telemetry.durationMs)}`
-          : `${Math.max(0, target - progress)} more needed in ${parts[1] ?? 'window'}`,
-      stamp: telemetry.endedAt,
-      meter:
-        target > 0 ? Math.max(10, Math.min(100, (progress / target) * 100)) : 0,
-      tone: 'alert',
-    }
-  }
-
-  return {
-    mode: telemetry.mode,
-    state: telemetry.state,
-    label: telemetry.label,
-    value: telemetry.value ?? fallbackValue,
-    caption:
-      telemetry.mode === 'reserved'
-        ? 'manual approval / execution boundary'
-        : telemetry.endedAt
-          ? `updated ${formatMaybeTimestamp(telemetry.endedAt, 'time')}`
-          : 'state surface',
-    stamp: telemetry.endedAt,
-    meter: telemetry.mode === 'reserved' ? 10 : telemetry.state === 'active' ? 84 : 64,
-    tone: telemetry.mode === 'reserved' ? 'planned' : stageId === 'fortigate' ? 'raw' : 'neutral',
-  }
-}
-
-function fallbackStageAction(
-  stageId: string,
-  status: StageNode['status'],
-  fallbackLabel: string,
-): LifecycleAction {
-  if (stageId === 'fortigate') {
-    return {
-      mode: 'status',
-      state: 'active',
-      label: 'source',
-      value: 'live',
-      caption: 'always-on ingress plane',
-      meter: 88,
-      tone: 'raw',
-    }
-  }
-
-  if (stageId === 'remediation') {
-    return {
-      mode: 'reserved',
-      state: 'planned',
-      label: 'boundary',
-      value: 'manual',
-      caption: 'approval path not wired',
-      meter: 10,
-      tone: 'planned',
-    }
-  }
-
-  return {
-    mode: status === 'planned' ? 'reserved' : 'status',
-    state: status === 'planned' ? 'planned' : 'steady',
-    label: 'state',
-    value: status === 'flowing' ? 'active' : status,
-    caption:
-      stageId === 'cluster-window'
-        ? 'waiting for same-key threshold'
-        : `${fallbackLabel} ready`,
-    meter: status === 'flowing' ? 76 : status === 'watch' ? 42 : 58,
-    tone:
-      stageId === 'ingest' || stageId === 'forwarder' || stageId === 'raw-topic'
-        ? 'raw'
-        : stageId === 'correlator' || stageId === 'alerts-topic' || stageId === 'cluster-window'
-          ? 'alert'
-          : 'suggestion',
-  }
+function buildLifecyclePhases(
+  snapshot: RuntimeSnapshot,
+  linkedSuggestion: SuggestionRecord,
+): LifecyclePhase[] {
+  return buildLifecycle(snapshot, linkedSuggestion)
 }
 
 function pulseStageIds(kind: FeedEvent['kind'], scope: SuggestionRecord['scope']) {
@@ -309,16 +303,27 @@ function toneForDelta(
   return pulseKindForDelta(kind)
 }
 
-function currentStageIndex(blocks: LifecycleBlock[], kind: FeedEvent['kind']) {
-  if (kind === 'raw') {
-    return blocks.findIndex((block) => block.id === 'raw-topic')
+function phaseIsPulsing(phase: LifecyclePhase, pulseIds: string[]) {
+  return phase.stageIds.some((stageId) => pulseIds.includes(stageId))
+}
+
+function currentPhaseId(
+  deltaKind: RuntimeStreamDelta['kind'] | undefined,
+  eventKind: FeedEvent['kind'] | undefined,
+) {
+  if (deltaKind === 'cluster') {
+    return 'cluster-gate'
   }
 
-  if (kind === 'alert') {
-    return blocks.findIndex((block) => block.id === 'cluster-window')
+  if (eventKind === 'raw') {
+    return 'edge-handoff'
   }
 
-  return blocks.findIndex((block) => block.id === 'suggestions-topic')
+  if (eventKind === 'alert') {
+    return 'deterministic-alert'
+  }
+
+  return 'suggestion-emission'
 }
 
 function suggestionForEvent(
@@ -438,7 +443,7 @@ export function LiveFlowConsole({
     snapshot.suggestions,
     selectedSuggestion,
   )
-  const lifecycle = buildLifecycle(snapshot, linkedSuggestion)
+  const lifecycle = buildLifecyclePhases(snapshot, linkedSuggestion)
   const pulseKind = pulseKindForDelta(latestDelta?.kind ?? snapshot.feed[0]?.kind)
   const pulseTone = toneForDelta(latestDelta?.kind ?? snapshot.feed[0]?.kind)
   const pulseIds =
@@ -450,10 +455,8 @@ export function LiveFlowConsole({
     snapshot.feed[0]?.id ??
     snapshot.runtime.latestSuggestionTs ??
     snapshot.runtime.latestAlertTs
-  const activeStageIndex = currentStageIndex(
-    lifecycle,
-    activeEvent?.kind ?? pulseKind,
-  )
+  const currentPhase = currentPhaseId(latestDelta?.kind, activeEvent?.kind ?? pulseKind)
+  const activeStageIndex = lifecycle.findIndex((phase) => phase.id === currentPhase)
   const activeSummary = activeEvent
     ? eventSummary(activeEvent, linkedSuggestion)
     : null
@@ -465,72 +468,73 @@ export function LiveFlowConsole({
           <div>
             <h2 className="section-title">Live Event Lifecycle</h2>
             <span className="section-subtitle">
-              Process first: ingest, deterministic alerting, cluster gate,
-              suggestion, remediation boundary.
+              Action view first: signal arrival, alerting, cluster gate,
+              suggestion emission, remediation boundary.
             </span>
           </div>
           <div className="annotation-stack">
-            <span className="section-kicker">directional runtime flow</span>
+            <span className="section-kicker">meaningful action flow</span>
             <span className={`signal-chip tone-${pulseTone}`}>{pulseTone}</span>
           </div>
         </div>
 
         <div className="lifecycle-track">
-          {lifecycle.map((block, index) => {
-            const isPulsing = pulseIds.includes(block.id)
+          {lifecycle.map((phase, index) => {
+            const isPulsing = phaseIsPulsing(phase, pulseIds)
             const pulseClass = isPulsing ? `pulse-${leadEventId.length % 2}` : ''
             const reached = index <= activeStageIndex ? 'is-reached' : ''
+            const current = index === activeStageIndex ? 'is-current' : ''
+            const nextPhase = lifecycle[index + 1]
+            const nextPulse = nextPhase && phaseIsPulsing(nextPhase, pulseIds)
 
             return (
               <div
-                key={`${block.id}-${isPulsing ? leadEventId : 'steady'}`}
-                className="stage-segment"
+                key={`${phase.id}-${isPulsing ? leadEventId : 'steady'}`}
+                className="phase-segment"
               >
                 <article
-                  className={`stage-card state-${block.status} ${pulseClass} ${reached}`}
+                  className={`phase-card state-${phase.status} ${pulseClass} ${reached} ${current}`}
                 >
-                  <div className="stage-header">
-                    <span className="stage-index">
+                  <div className="phase-header">
+                    <span className="phase-index">
                       {(index + 1).toString().padStart(2, '0')}
                     </span>
                     <div>
-                      <strong>{block.title}</strong>
-                      <span>{block.subtitle}</span>
+                      <strong>{phase.title}</strong>
+                      <span>{phase.purpose}</span>
                     </div>
                   </div>
-                  <ul className="stage-metrics">
-                    {block.metrics.map((metric) => (
-                      <li key={`${block.id}-${metric.label}`}>
-                        <span>{metric.label}</span>
-                        <strong>{metric.value}</strong>
-                      </li>
+
+                  <div className="phase-system-line">{phase.systems}</div>
+
+                  <ul className="phase-facts">
+                    {phase.facts.map((fact) => (
+                      <li key={`${phase.id}-${fact}`}>{fact}</li>
                     ))}
                   </ul>
-                </article>
 
-                <div
-                  className={`stage-action mode-${block.action.mode} state-${block.action.state} tone-${block.action.tone} ${pulseClass}`}
-                  title={timestampTooltip(block.action.stamp)}
-                >
-                  <div className="stage-action-head">
-                    <span>{block.action.label}</span>
-                    <strong>{block.action.value}</strong>
+                  <div
+                    className={`phase-band mode-${phase.band.mode} state-${phase.band.state} tone-${phase.band.tone} ${pulseClass}`}
+                    title={timestampTooltip(phase.band.stamp)}
+                  >
+                    <div className="phase-band-head">
+                      <span>{phase.band.label}</span>
+                      <strong>{phase.band.value}</strong>
+                    </div>
+                    <span className="phase-band-detail">{phase.band.detail}</span>
+                    <div className="phase-band-track" aria-hidden="true">
+                      <span style={{ width: `${phase.band.meter}%` }} />
+                    </div>
                   </div>
-                  {block.action.caption ? (
-                    <span className="stage-action-caption">{block.action.caption}</span>
-                  ) : null}
-                  <div className="stage-action-meter" aria-hidden="true">
-                    <span style={{ width: `${block.action.meter}%` }} />
-                  </div>
-                </div>
+                </article>
 
                 {index < lifecycle.length - 1 ? (
                   <div
-                    className={`stage-link ${pulseIds.includes(lifecycle[index + 1].id) ? `pulse-${leadEventId.length % 2}` : ''}`}
+                    className={`phase-link ${nextPulse ? `pulse-${leadEventId.length % 2}` : ''} ${index < activeStageIndex ? 'is-reached' : ''}`}
                     aria-hidden="true"
                   >
-                    <span className="stage-link-line" />
-                    <span className="stage-link-runner" />
+                    <span className="phase-link-line" />
+                    <span className="phase-link-runner" />
                   </div>
                 ) : null}
               </div>
@@ -554,7 +558,7 @@ export function LiveFlowConsole({
             <div>
               <h2 className="section-title">Cluster Watch</h2>
               <span className="section-subtitle">
-                Same rule + severity + service + device inside the live cluster gate.
+                Which repeated alert paths are closest to becoming cluster-scope suggestions.
               </span>
             </div>
             <span className="section-kicker">600s / min=3</span>
@@ -578,7 +582,11 @@ export function LiveFlowConsole({
                     }}
                   />
                 </div>
-                <p>{item.note}</p>
+                <p>
+                  {item.progress >= item.target
+                    ? `Reached cluster threshold inside the last ${item.windowSec}s.`
+                    : `${item.progress} matching alert(s) in the last ${item.windowSec}s; ${item.target - item.progress} more needed.`}
+                </p>
               </li>
             ))}
           </ul>
