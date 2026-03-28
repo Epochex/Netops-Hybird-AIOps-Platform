@@ -192,3 +192,86 @@ export interface RuntimeSnapshot {
   feed: FeedEvent[]
   topologyNotes: Array<{ title: string; detail: string }>
 }
+
+export interface CompareWindow {
+  start: string
+  end: string
+  label: string
+}
+
+export interface CompareCurrentSlice {
+  title: string
+  alertId: string
+  service: string
+  device: string
+  ruleId: string
+  focus: string
+}
+
+export interface CompareMetrics {
+  alertCount: number
+  clusterTriggerCount: number
+  suggestionEmissionCount: number
+  operatorActionCount: number
+  remediationClosureCount: number
+  medianTransitionMs: number
+  tokenCost: number
+  cpuProxyPct: number
+}
+
+export interface CompareTimelineStep {
+  stamp: string
+  title: string
+  detail: string
+  state: 'observed' | 'gated' | 'generated' | 'acted' | 'closed' | 'reserved'
+}
+
+export interface CompareControlBoundary {
+  status: string
+  detail: string
+  exportReadiness: 'ready' | 'partial' | 'blocked'
+}
+
+export interface CompareExportArtifacts {
+  status: 'ready' | 'partial' | 'blocked'
+  detail: string
+  items: string[]
+}
+
+export interface CompareFixtureBranch {
+  id: string
+  label: string
+  mode: 'rule-only' | 'agent-enhanced'
+  timeWindow: CompareWindow
+  summary: string
+  currentSlice: CompareCurrentSlice
+  metrics: CompareMetrics
+  timeline: CompareTimelineStep[]
+  controlBoundary: CompareControlBoundary
+  exportArtifacts: CompareExportArtifacts
+}
+
+export interface CompareHighlight {
+  label: string
+  ruleOnly: string
+  agentEnhanced: string
+  delta: string
+}
+
+export interface RuntimeUiScenario {
+  id: string
+  label: string
+  state: string
+  why: string
+  propsPreview: string[]
+}
+
+export interface RuntimeUiStory {
+  componentId: string
+  intent: string
+  scenarios: RuntimeUiScenario[]
+}
+
+export interface RuntimeUiStoryCatalog {
+  components: RuntimeUiStory[]
+}

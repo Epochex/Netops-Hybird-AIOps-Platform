@@ -101,3 +101,11 @@ export function formatDurationMs(value: number | null | undefined) {
   const remainingMinutes = minutes % 60
   return `${hours}h ${remainingMinutes}m`
 }
+
+export function formatPreciseDurationMs(value: number | null | undefined) {
+  if (value === null || value === undefined) {
+    return 'n/a'
+  }
+
+  return `${(Math.max(value, 0) / 1000).toFixed(3)} s`
+}
