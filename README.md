@@ -1,266 +1,181 @@
 ## Towards NetOps: Hybrid AIOps Platform for Network Awareness and Automated Remediation
 [![English](https://img.shields.io/badge/Language-English-1f6feb)](./README.md) [![简体中文](https://img.shields.io/badge/%E8%AF%AD%E8%A8%80-%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-2ea043)](./README_CN.md)
 
-> Hybrid AIOps Platform: Deterministic Streaming Core + CPU Local LLM (On-Demand) + Multi-Agent Orchestration
+> Deterministic network data plane first. Bounded AIOps augmentation second.
 
 #### Project Overview
 
-This project aims to build a **distributed AIOps platform (Towards NetOps)** for complex network operations scenarios, following the main line of **Edge Fact Ingestion → Core Streaming Analytics → LLM-Augmented Reasoning → Remediation Loop**, and progressively implementing an engineering capability evolution from anomaly detection and evidence-chain attribution to remediation recommendation and execution control. The platform does not target “real-time LLM inference on full-volume logs”; instead, it is built on a stable data plane and explainable evidence flow, and performs on-demand intelligent augmented analysis for eligible alerts and repeated anomaly clusters on the core side, in order to achieve a deployable balance among cost, real-time performance, and operability.
+Towards NetOps is built around a straightforward operating rule:
 
-#### Architecture Paradigm
+- raw device traffic stays on a deterministic streaming path
+- model-driven analysis starts only after an alert exists and enough evidence has been assembled
+- every output that matters is written back as structured data, not as an opaque side effect
 
-The system adopts a layered architecture of **Edge Ingestion + Core Analytics**. The edge side is responsible for near-source log collection, structured fact eventization, audit trail retention, and replayable persistence, converting raw device logs into a sustainably consumable fact event stream; the core side is responsible for streaming data plane hosting, event aggregation and correlation analysis, and evidence-chain construction, and on this basis introduces an **LLM-augmented analytics layer** for alert explanation, situation summarization, attribution assistance, and Runbook draft generation. This augmentation layer adopts a **resident service + rate-limited queue** operating mode: rule-based/streaming modules perform real-time detection and high-value anomaly filtering, while the LLM performs low-concurrency, on-demand inference only on alert-level context, avoiding contention with the real-time performance and system resources of the main path.
-
-> [!IMPORTANT]
-> The platform target is not “real-time LLM inference on full-volume logs,” but on-demand intelligent augmented analysis of eligible alerts and repeated alert clusters based on a stable data plane and explainable evidence flow.
-
-- Current Technical Route Under Resource Constraints
-
-Under current resource constraints (no GPU on the core side, CPU-only inference), the technical route of this project is explicitly **“deterministic streaming analytics as the primary path + on-demand LLM augmentation”**: real-time detection, basic aggregation, and correlation computation are handled by rule-based/stream processing modules; the LLM is responsible for explanation and planning generation over compressed high-value evidence context. This design enables the platform, without relying on local training or continuous high-cost API calls, to still progressively evolve toward Multiple Agent + LLM collaborative analysis and automated remediation closed-loop capability.
-
-> [!NOTE]
-> At the current stage, the priorities are: stable data plane, explainable evidence flow, and runnable core pipeline; the LLM is connected on demand as an alert-level augmentation module.
-
-The project construction sequence is expected to proceed in the following stages:
-
-1. **Phase 1: Engineering implementation of the edge fact ingestion layer**  
-   Complete ingestion of FortiGate logs (and potentially additional network device logs in the future), ensuring the input is auditable, recoverable, and replayable.
-
-2. **Phase 2: Core-side data plane and minimal streaming consumption pipeline**  
-   Establish the data plane on the core side, and complete event transport decoupling and basic aggregation analytics.
-
-3. **Phase 3: Introduction of AIOps augmented analytics capabilities**  
-   Based on AIOps principles, progressively introduce Multiple Agent + LLM capabilities for correlation analysis, network situational awareness, evidence-chain attribution, and automated self-healing Runbook generation.
-
-4. **Phase 4: Remediation loop extension**  
-   Under explainability and verifiability constraints, extend to remediation recommendations, human approval execution, and low-perception automated self-healing.
+The repository already contains a runnable path from **FortiGate log -> structured fact -> deterministic alert -> persisted context -> operator-facing suggestion**. The current focus is not "LLM over every log line". The current focus is to keep the data plane stable, make the evidence path explainable, and add bounded AIOps value where it changes an operator decision.
 
 ## Design Boundary
 
 > [!WARNING]
-> At the current stage, this project does not take “per-event LLM judgment over the full event stream” as an architectural target.  
-> The main path is handled by deterministic streaming modules for real-time detection and basic correlation; LLM/Agent components are used for on-demand augmented analysis of eligible alerts, repeated clusters, and remediation recommendation generation.
+> This project is not designed around per-event LLM inference on the full raw stream.
+> Real-time detection stays on deterministic modules. AIOps runs on top of the alert contract.
 
-## Current Progress Snapshot (2026-03-22)
+## System Design In One Page
 
-> [!TIP]
-> Runtime ownership is now explicit: `edge/*` only for edge node components, `core/*` only for core node components.
+```text
+FortiGate / network device logs
+  -> edge/fortigate-ingest
+       parse, normalize, checkpoint, replay
+  -> edge/edge_forwarder
+       suppress edge noise, preserve field semantics
+  -> Kafka topic: netops.facts.raw.v1
+  -> core/correlator
+       quality gate, rules, window logic, alert emission
+  -> Kafka topic: netops.alerts.v1
+       -> core/alerts_sink      hourly JSONL audit trail
+       -> core/alerts_store     ClickHouse hot query surface
+       -> core/aiops_agent      evidence assembly + bounded augmentation
+            -> alert-scope suggestion path
+            -> cluster-scope suggestion path
+  -> Kafka topic: netops.aiops.suggestions.v1
+  -> frontend runtime gateway / operator console
+```
 
-### Implemented Runtime Flow
+### Top-Down Runtime Flow
 
 ```mermaid
 flowchart LR
-  A[edge/fortigate-ingest] --> B[edge/edge_forwarder]
-  B --> C[Kafka: netops.facts.raw.v1]
-  C --> D[core/correlator<br/>quality_gate + rules]
-  D --> E[Kafka: netops.alerts.v1]
-  E --> F[core/alerts_sink<br/>hourly JSONL]
-  E --> G[core/alerts_store<br/>ClickHouse]
-  E --> H[core/aiops_agent]
-  H --> I[Kafka: netops.aiops.suggestions.v1]
+  A[FortiGate logs] --> B[edge/fortigate-ingest]
+  B --> C[edge/edge_forwarder]
+  C --> D[Kafka: netops.facts.raw.v1]
+  D --> E[core/correlator]
+  E --> F[Kafka: netops.alerts.v1]
+  F --> G[core/alerts_sink<br/>hourly JSONL]
+  F --> H[core/alerts_store<br/>ClickHouse]
+  F --> I[core/aiops_agent]
+  I --> J[Kafka: netops.aiops.suggestions.v1]
+  J --> K[frontend runtime gateway / console]
 ```
 
-### Implemented Modules and Stack
+### Why The Module Split Is Reasonable
 
-| Layer | Module | Responsibility | Tech |
+- **Edge parsing stays near the source.** `edge/fortigate-ingest` handles file rotation, checkpointing, replay, and normalization where the logs arrive. That keeps WAN hops and central services away from raw text handling.
+- **The core only sees structured facts.** `core/correlator` does not need vendor-specific parsing logic. It consumes a stable fact contract and can focus on gates, rules, and windows.
+- **Alert persistence is split on purpose.** JSONL gives an audit and replay trail. ClickHouse gives low-latency query, recent-history lookup, and context enrichment. Both are needed.
+- **AIOps is downstream of alerting, not upstream of it.** That keeps the real-time path predictable and gives the slow path a bounded, evidence-rich input.
+- **The suggestion layer has two scopes.** One path answers "what should I do about this alert right now?" The other answers "is this repeated pattern meaningful at cluster scale?"
+- **The operator console remains read-only.** Observation, explanation, and control boundaries are visible, but execution is not hidden inside the UI.
+
+## Current Runtime Snapshot
+
+The repository state on `main` is best described as:
+
+- edge ingest is running and replay-safe
+- deterministic core correlation is in place
+- alert persistence is in place
+- minimal AIOps suggestion emission is in place
+- frontend runtime console is in place
+- remediation execution is still a reserved boundary, not a live write-back path
+
+### Implemented Modules
+
+| Layer | Module | Responsibility | Why it exists |
 | --- | --- | --- | --- |
-| Edge ingest | `edge/fortigate-ingest` | Parse FortiGate logs, checkpoint replay, DLQ/metrics output | Python, JSONL |
-| Edge filter/forward | `edge/edge_forwarder` | Noise suppression + forward to core topic | Python, Kafka |
-| Core correlator | `core/correlator` | Quality gate, rule matching, alert emit, manual offset commit | Python, Kafka |
-| Alert persistence | `core/alerts_sink` | Persist alerts to hourly JSONL | Python |
-| Hot analytics store | `core/alerts_store` | Consume alerts and store structured records | ClickHouse, `clickhouse-connect` |
-| AIOps assistant (minimal) | `core/aiops_agent` | Build alert-scope and cluster-scope evidence/request pipelines, emit structured suggestions, and persist audit JSONL | Python, Kafka, ClickHouse |
-| Ops tooling | `core/benchmark/*` | Runtime watch and warning-noise observation | Python, `kubectl` |
+| Edge ingest | `edge/fortigate-ingest` | Parse FortiGate logs, normalize events, manage checkpoints, produce replayable JSONL facts | Raw log handling is messy and stateful; it should stay close to the log source |
+| Edge forward | `edge/edge_forwarder` | Read parsed facts, suppress edge-side noise, forward to core raw topic | Keeps transport and light filtering separate from parsing |
+| Core correlation | `core/correlator` | Apply quality gates, rules, and sliding windows; emit alerts | This is the deterministic decision point of the system |
+| Alert audit sink | `core/alerts_sink` | Persist alert stream to hourly JSONL | Needed for replay, audit, and low-friction inspection |
+| Hot alert store | `core/alerts_store` | Store alerts in ClickHouse | Needed for recent history, analytics, and AIOps context lookup |
+| AIOps augmentation | `core/aiops_agent` | Build evidence, query context, run bounded inference/template logic, emit suggestions | Keeps the slow path explicit and downstream of alerts |
+| Frontend console | `frontend` + gateway | Show the live path `raw -> alert -> suggestion -> boundary` in an operator-readable form | Makes runtime state visible without mixing it into backend services |
+| Validation tooling | `core/benchmark/*` | Replay, timing audit, live runtime validation | Lets the system be checked against real traffic instead of hand-wavy assumptions |
 
-> [!NOTE]
-> The current repository state is best described as: **Phase-2 core data plane closed loop is in place, and a minimal AIOps alert + cluster suggestion loop has landed on top of it**.  
-> Deterministic streaming detection and alert persistence are already implemented; true LLM inference, causal evidence-chain reasoning, and remediation execution control remain the next-stage work.
+## Dual-Path AIOps
 
-### Frontend Module
+The AIOps layer has two outputs on purpose.
 
-- Scope
-  - Process-centric operator console for the live chain `raw -> alert -> suggestion -> remediation boundary`; not a generic admin dashboard.
-- Core stack
-  - `React 19 + Vite + TypeScript`
-  - State: local React state plus a custom `useRuntimeSnapshot` hook; no external store yet because the UI graph is still shallow and event ownership is singular.
-  - Routing: no dedicated router yet; the current surface is two primary views switched in-app (`Live Flow Console`, `Pipeline Topology`).
-  - UI: custom CSS system with dense, square, non-template layout; no off-the-shelf admin kit.
-  - Realtime: `FastAPI` gateway + `SSE`; initial HTTP snapshot followed by stream updates.
-  - Visualization: `React Flow` for pipeline topology, `ECharts` for cadence and evidence-density views.
-  - Build / deploy: `Vite` for dev/build, same-origin `FastAPI` static serving for deployable mode, optional `Docker + k3s Deployment`.
-- Module responsibilities
-  - Convert runtime files and deployment controls into an operator-readable process console.
-  - Expose freshness, backlog, cluster watch, evidence thickness, and suggestion detail without flattening the pipeline into unrelated metric cards.
-  - Keep remediation explicit as a control boundary rather than pretending execution is already part of the live runtime.
-- Backend integration
-  - `GET /api/runtime/snapshot` hydrates the initial view.
-  - `GET /api/runtime/stream` pushes SSE envelopes (`snapshot`, `delta`, `heartbeat`) so the UI can update only the affected stage/event region.
-  - The gateway derives state from `/data/netops-runtime` JSONL sinks plus deployment env values in `core/` and `edge/`.
-  - Local dev uses Vite proxying `/api` to `:8026`; deployed mode is same-origin, so CORS is not part of the default path.
-- Key interaction chain
-  - Live runtime snapshot -> operator selects a suggestion slice -> center views keep the pipeline legible -> right drawer pivots to evidence, hypotheses, actions, and control points -> cluster pre-trigger watch makes policy tuning visible before a cluster-scope hit is emitted.
-- Core surfaces
-  - `Live Flow Console`: runtime overview, current-day cadence, chain timeline, live feed, and pre-trigger watch.
-  - `Pipeline Topology`: module / topic / control graph for backend tuning and runtime legibility.
-  - `Evidence Drawer`: selected suggestion context, evidence bundle, confidence, recommended actions, and strategy controls.
-- Design value
-  - The backend semantics are event-lifecycle-driven, so the frontend is process-first rather than panel-first.
-  - Same-origin deployment keeps the console operationally light and avoids unnecessary cross-origin plumbing.
-  - Avoiding external store/router complexity at this stage keeps iteration fast while the product surface is still a focused console rather than a multi-product shell.
+### 1. Alert-scope path
 
-### Operational Safety Boundary
+This path runs for each eligible alert. It gives the operator an immediate explanation and next-step suggestion even if the event never forms a cluster.
 
-- The current frontend console and runtime gateway are **observation-only**.
-- They read JSONL sinks, deployment env values, and live runtime audit files, but do **not** write back to:
-  - FortiGate routers
-  - edge/core runtime configuration
-  - Kubernetes deployments
-  - remediation execution channels
-- `Remediation Loop` is intentionally rendered as a reserved control boundary rather than as a live write-back stage. Any future approval/execution path must remain explicitly separated from the current read-only console.
+### 2. Cluster-scope path
 
-### Live Event Lifecycle (Current Action View)
+This path runs when repeated alerts hit a same-key threshold within a time window. It captures pattern-level meaning that a single alert cannot carry on its own.
 
-- The live console no longer leads with a wall of ten technical modules. Its primary lifecycle view is now grouped into the operator-meaningful actions below; the full module/topic graph remains on `Pipeline Topology`.
-- `01 Source Signal`
-  - A real FortiGate device log has entered the platform. This makes the ingress plane legible without pretending the source itself is a timed service hop.
-- `02 Edge Parse + Handoff`
-  - `fortigate-ingest`, `edge-forwarder`, and `netops.facts.raw.v1` are collapsed into one action phase: normalize the log, preserve replay/checkpoint semantics, and hand the fact into the raw stream.
-- `03 Deterministic Alert`
-  - `core-correlator` plus `netops.alerts.v1`. This is the first true decision point: the system either crosses the rule threshold or it does not.
-- `04 Cluster Gate`
-  - The same-key aggregation window. It answers “how close is this path to becoming cluster-scope?” rather than exposing the user to a raw implementation detail first.
-- `05 AIOps Suggestion`
-  - `core-aiops-agent` plus `netops.aiops.suggestions.v1`. Evidence is assembled, provider logic runs, and structured operator guidance is emitted.
-- `06 Remediation Boundary`
-  - Approval / execution / feedback remains visible as the next boundary, but is still intentionally read-only and not wired into production write-back.
+### Why both paths are needed
 
-Why this action view is preferable on the homepage:
+- If the system emits only cluster-scope suggestions, it stays silent on isolated but still actionable alerts.
+- If the system emits only alert-scope suggestions, it misses repeated-pattern context and overstates single events.
+- Keeping both paths behind the same alert contract preserves one deterministic main path while still allowing two different operator views of the same problem.
 
-- First-time users can understand what the platform is doing without already knowing every internal topic or service name.
-- Timing bands stay honest: only phases with meaningful start/end semantics show elapsed time; gate phases show progress; source/boundary phases show live state rather than fake latency numbers.
-- The technical ten-module decomposition still exists, but it belongs on the topology view rather than as the first thing operators must decode.
+### Dual-Path Diagram
 
-### Realtime UI Update Model
+```mermaid
+flowchart LR
+  A[Kafka: netops.alerts.v1] --> B[Eligibility gate]
+  B --> C[Alert-scope evidence bundle]
+  C --> D[Alert-scope suggestion]
+  B --> E[Cluster aggregator<br/>rule_id + severity + service + src_device_key]
+  E -->|threshold met| F[Cluster-scope evidence bundle]
+  F --> G[Cluster-scope suggestion]
+```
 
-- Current implementation
-  - The gateway serves an initial `GET /api/runtime/snapshot`, then keeps an SSE stream open with event envelopes: initial `snapshot`, event-triggered `delta`, and low-rate `heartbeat`.
-  - Runtime deltas are emitted when the feed or cluster gate actually changes; the default poll interval for detecting file-based updates is now `NETOPS_CONSOLE_STREAM_INTERVAL_SEC=1`.
-- Why the public proxy path can feel less “live”
-  - The stream now carries stage deltas, but the public demo path still adds WAN + proxy + tailnet hops on top of the local file-poll detection loop.
-  - This means public viewers should see materially better responsiveness than the old 5-second heartbeat, but still not the same feel as direct local/Tailscale access.
-- Stage timers
-  - The lifecycle cards now reserve a consistent action/timing band under each stage.
-  - Only stages with meaningful boundaries render a real elapsed duration; other stages use the same band to show state, gate semantics, or reserved-control status.
-  - This keeps the UI honest: `FortiGate` and `Remediation Loop` are not faked into “latency measurements”, while `edge -> alert`, cluster window span, and `alert -> suggestion` can show real timing metadata.
-- Resource impact
-  - Event-triggered stage updates do **not** materially increase resource usage if the stream is limited to operator-relevant transitions.
-  - It can reduce perceived latency while keeping bandwidth/I/O bounded, because the UI only animates changed regions instead of treating every refresh as a full-screen state change.
-  - The expensive version would be pushing every raw fact directly to the UI; that is not recommended.
-  - The practical target is: keep raw/high-volume data in Kafka/runtime files, and push only stage deltas plus timing metadata to the frontend.
-
-### Current Resource Boundary and Next-Stage Plan
-
-- Observed node utilization (`2026-03-24` sample)
-  - `r230`: about `2%` CPU and `36%` memory (`kubectl top node`)
-  - `r450`: about `3%` CPU and `61%` memory (`kubectl top node`)
-- Resource interpretation
-  - The current `edge -> core -> suggestion` deterministic pipeline is adequately provisioned on the existing two-node layout.
-  - The near-term limitation is not data-plane CPU, but the absence of a resident inference plane for the next-stage `LLM / Multiple Agent` work.
-  - The repository still runs the minimal built-in provider by default, so **current production runtime does not require a GPU to keep the main path alive**.
-- Current flow-intensity indicators
-  - More reliable live-path baseline from the formal observability window (`2026-03-22 18:54:10 UTC` -> `2026-03-23 08:34:08 UTC`, `13.67h`): `raw ≈ 7.48 events/s`, `alerts ≈ 21.5/hour`, `suggestions ≈ 20.8/hour`.
-  - Current local sink cadence (`2026-03-24 12:10 UTC` sample): `suggestions = 83 / 10m` (`≈0.14/s`), `406 / 60m` (`≈0.11/s`), `4055 / 6h`; `alerts = 0 / 60m`.
-  - Latest local timestamps at the same sample point: `latest_alert_ts = 2026-03-23T20:53:49+00:00`, `latest_suggestion_ts = 2026-03-24T12:10:13.943421+00:00`.
-  - Interpretation: the current suggestion cadence should not be read as fresh live alert ingress. It is consistent with processing-time suggestion emission over older alert context / replay-like semantics, and should be used as an upper operational load indicator rather than as the true live alert rate.
-  - Practical sizing implication: even the elevated current suggestion cadence is still well below `1 inference request/sec`, which means latency budget and queue design matter more than raw multi-GPU scale at this stage.
-- Current practical boundary
-  - `r450` memory expansion remains desirable for on-box model serving, but should not be treated as a short-term assumption.
-  - The practical next step is therefore to keep Kafka / ClickHouse / correlator local on `r450`, and attach GPU-backed inference through the existing provider boundary.
-- GPU sizing estimate for the next stage
-  - Minimum viable: `1 x 16GB VRAM` plus entry-level inference compute (`A2 16GB`-class) for one quantized `7B/8B`-class resident model in low-concurrency, rate-limited alert/cluster inference mode.
-  - Recommended: `1 x 24GB VRAM` plus stronger inference compute (`L4 / A10 / 4090`-class) for one resident model with structured-output, tool-calling, and limited multi-agent orchestration headroom.
-  - Stretch only if justified by measured load: `48GB+ VRAM` or multi-GPU (`A40 / A6000`-class or beyond), only when `13B+` local models, multiple resident models, or materially higher agent concurrency become real requirements.
-  - Note: VRAM is the hard fit constraint; compute class determines latency. Exact tokens/sec and p95 response time depend on the serving stack (`vLLM` / `TGI` / `llama.cpp`), quantization level, prompt size, output length, and tool-calling round trips, so they must be benchmarked on the chosen model/service combination rather than inferred from VRAM alone.
-- Optimization priority for the inference plane
-  - First: async queueing, retries, backpressure, prompt/prefix caching, evidence compression, and model routing (`template -> remote LLM -> fallback`).
-  - Later: continuous batching and speculative decoding / draft-model acceleration, only after the model service itself becomes the dominant bottleneck.
-  - Rationale: the target workload is still low-concurrency and tool/evidence-heavy, so early wins come from orchestration and queue design more than token-level decode tricks.
-
-### Landed vs Next Modules
-
-- Landed in the repository/runtime
-  - `edge/fortigate-ingest`
-  - `edge/edge_forwarder`
-  - `core/correlator`
-  - `core/alerts_sink`
-  - `core/alerts_store`
-  - `core/aiops_agent` (alert-scope + cluster-scope minimal loop)
-  - `core/benchmark/*`
-  - `frontend` operator console + runtime gateway
-- Next-stage modules to build
-  - Remote/local resident inference service behind the provider boundary
-  - Evidence retrieval/cache layer for compact, repeatable model input
-  - Model router / policy gate (`template`, remote LLM, fallback)
-  - Multiple-agent orchestration for triage, RCA, and runbook drafting
-  - Remediation planning / approval / feedback control surface
-  - Evaluation harness for latency, cost, RCA quality, and runbook usefulness
-
-### Remote GPU Integration Path (External Research GPU Provider)
-
-- Expected external resource
-  - The additional inference GPU resource is expected to come from an **external research GPU provider** rather than from an immediate on-box upgrade on `r450`.
-- Recommended system split
-  - Keep `r230` and `r450` as the current data plane and operator plane in the existing environment.
-  - Deploy a GPU-adjacent inference gateway close to the external compute resource.
-  - Use the existing provider abstraction so `core-aiops-agent` can switch from the built-in provider to an HTTP-backed inference service without changing the main deterministic chain.
-- Recommended cross-region data contract
-  - Keep raw logs, Kafka state, ClickHouse, and operational control local.
-  - Send only compressed alert/cluster evidence bundles, retrieval summaries, and bounded structured prompts across the WAN.
-  - Persist final suggestions, confidence, and audit metadata back on the local core side.
-- Operational assumptions
-  - France-side operator access and China-side GPU inference should be treated as an **asynchronous augmentation plane**, not a blocking dependency for real-time detection.
-  - The remote path should include strict timeout policy, request IDs, retry budgets, API-key/TLS protection, and fallback to the local template provider.
-  - If cross-border policy requirements apply in your environment, review what evidence fields are allowed to leave the local core side before enabling the remote path.
-
-### AIOps Agent Module Diagram
+### Internal Shape Of `core/aiops_agent`
 
 ```mermaid
 flowchart TD
-  M[core.aiops_agent.main] --> C[app_config]
+  M[core.aiops_agent.main] --> CFG[app_config]
   M --> IO[runtime_io]
   M --> SVC[service]
   SVC --> CL[cluster_aggregator]
   SVC --> CTX[context_lookup]
-  SVC --> EB[evidence_bundle]
-  SVC --> IS[inference_schema]
-  SVC --> IQ[inference_queue]
-  SVC --> IW[inference_worker]
-  SVC --> PR[providers]
-  SVC --> ENG[suggestion_engine]
+  SVC --> EVD[evidence_bundle]
+  SVC --> SCHEMA[inference_schema]
+  SVC --> QUEUE[inference_queue]
+  SVC --> WORKER[inference_worker]
+  SVC --> PROVIDERS[providers]
+  SVC --> ENGINE[suggestion_engine]
   SVC --> OUT[output_sink]
 ```
 
-- `app_config`: normalize env config and enforce severity gate policy.
-- `runtime_io`: initialize Kafka/ClickHouse clients in one place.
-- `cluster_aggregator`: aggregate alerts by `rule_id + severity + service + src_device_key` in a sliding window.
-- `evidence_bundle`: assemble alert-scope and cluster-scope evidence bundles from alert, rule, history, change, and topology context.
-- `inference_schema`: define provider-facing request/result schema for both `alert_triage` and `cluster_triage`.
-- `inference_queue` / `inference_worker`: keep the slow path explicit even when currently running synchronously.
-- `providers`: abstract built-in template inference from future external/local model providers.
-- `service`: consume alerts, emit one alert-scope suggestion for each eligible alert, emit an extra cluster-scope suggestion when aggregation triggers, and commit offsets only after successful handling.
-- `context_lookup`: query recent-similar counts from ClickHouse for context enrichment.
-- `suggestion_engine`: map provider output and evidence back into a stable suggestion payload schema.
-- `output_sink`: persist hourly JSONL evidence for audit/replay.
+`core/aiops_agent` is split this way for practical reasons:
 
-### Reliability Hardening Already Applied
+- `app_config` keeps runtime policy in one place
+- `runtime_io` owns Kafka and ClickHouse client setup
+- `cluster_aggregator` isolates windowing and threshold logic
+- `context_lookup` isolates recent-history reads from ClickHouse
+- `evidence_bundle` keeps prompt/context assembly explicit and testable
+- `inference_schema` makes provider input/output contracts stable
+- `inference_queue` and `inference_worker` keep the slow path visible even when concurrency is low
+- `providers` separates template mode from future remote or local model backends
+- `suggestion_engine` converts provider output into the repository's stable suggestion schema
+- `output_sink` persists suggestion audit files for replay and inspection
 
-- Release script now avoids updating edge runtime image during core-only releases.
-- Post-release validation was added to verify module importability in running pods (to catch image/content mismatch early).
-- Core consumers moved to `enable_auto_commit=False` and commit offsets after successful processing.
-- Rule thresholds are profile-based (`core/correlator/rule_profile.py`) for environment-specific tuning.
-- ClickHouse context lookup now accepts dict-like `first_item` payloads from the running client, avoiding false-negative context errors during suggestion generation.
+## Frontend Console
 
-### Baseline Verification (before merge/release)
+The frontend is not the architectural center of the repository, so the root README keeps it short.
+
+- It is a read-only operator console for the path `raw -> alert -> suggestion -> remediation boundary`
+- It consumes `GET /api/runtime/snapshot` and `GET /api/runtime/stream`
+- It is process-first, not dashboard-first
+- It keeps remediation visible as a control boundary instead of pretending execution already exists
+
+Frontend details, deployment notes, and review workflow now live under [frontend/README.md](./frontend/README.md) and [frontend/documentation](./frontend/documentation).
+
+## Safety Boundary
+
+- Current runtime UI and runtime gateway are observation-only
+- They do not write back to devices, core configuration, Kubernetes, or remediation channels
+- Any future approval or execution path must remain explicitly separated from the current read surface
+
+## Resource Boundary And Next Step
+
+The current bottleneck is not the deterministic data plane. The near-term bottleneck is the future inference plane.
+
+- Kafka, ClickHouse, correlator, and alert persistence already fit the current two-node layout
+- The slow path still defaults to the built-in provider, so the main path does not depend on a GPU
+- The next hardware step is a resident inference plane behind the provider abstraction, not a redesign of the deterministic core
+
+## Baseline Verification
 
 ```bash
 python3 -m pytest -q tests/core
@@ -268,9 +183,7 @@ python3 -m compileall -q core
 bash -n core/automatic_scripts/release_core_app.sh
 ```
 
-> [!NOTE]
-> `tests/core` now covers `rules`, `quality_gate`, `alerts_sink`, `alerts_store`, and `aiops_agent` (including alert-scope + cluster-scope suggestion paths).
-> Latest local verification on the repository baseline passed `31` core tests, and the current baseline is suitable for iterative AIOps feature development on top of the existing core pipeline.
+Core-side tests currently cover `rules`, `quality_gate`, `alerts_sink`, `alerts_store`, and `aiops_agent`, including alert-scope and cluster-scope suggestion paths.
 
 ### Realtime Validation After The Dual-Path AIOps Update (2026-03-22)
 
