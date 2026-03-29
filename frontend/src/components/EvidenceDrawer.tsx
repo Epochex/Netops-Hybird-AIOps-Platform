@@ -51,11 +51,79 @@ function whyItMatters(suggestion: SuggestionRecord, locale: UiLocale) {
   return `${suggestion.context.service} on ${suggestion.context.srcDeviceKey} is currently being treated as a ${suggestion.scope}-scope slice with ${attached} context attached${recentSimilar > 0 ? ` and ${recentSimilar} similar alert(s) in the last hour` : ''}.`
 }
 
+function primaryHypothesis(suggestion: SuggestionRecord, locale: 'en' | 'zh') {
+  return (
+    suggestion.hypotheses[0] ??
+    (locale === 'zh'
+      ? '当前没有单独的假设文本，先沿着已挂载证据继续检查。'
+      : 'No standalone hypothesis is attached yet, so continue from the evidence already attached.')
+  )
+}
+
+function leadingAction(suggestion: SuggestionRecord, locale: 'en' | 'zh') {
+  return (
+    suggestion.recommendedActions[0] ??
+    (locale === 'zh'
+      ? '先展开证据字段，再决定是否需要进一步人工处置。'
+      : 'Open the evidence fields first, then decide whether manual action is needed.')
+  )
+}
+
+function evidenceOverview(suggestion: SuggestionRecord, locale: 'en' | 'zh') {
+  const attached = attachedEvidenceKinds(suggestion).join(' + ')
+  return locale === 'zh'
+    ? `${attached} 已挂载，cluster gate=${suggestion.context.clusterSize}/${suggestion.context.clusterWindowSec}s`
+    : `${attached} attached, cluster gate=${suggestion.context.clusterSize}/${suggestion.context.clusterWindowSec}s`
+}
+
+function humanReadableTitle(suggestion: SuggestionRecord, locale: 'en' | 'zh') {
+  const deviceName = suggestion.evidenceBundle.device.device_name
+  const deviceLabel =
+    typeof deviceName === 'string' && deviceName.trim().length > 0
+      ? deviceName
+      : suggestion.context.srcDeviceKey
+
+  if (locale === 'zh') {
+    return `${suggestion.context.service} 在 ${deviceLabel} 上出现重复 deny`
+  }
+
+  return `Repeated denies on ${suggestion.context.service} from ${deviceLabel}`
+}
+
 export function EvidenceDrawer({
   suggestion,
   controls,
   locale,
 }: EvidenceDrawerProps) {
+  const copy =
+    locale === 'zh'
+      ? {
+          title: '当前建议 / 证据轨迹',
+          overview: '打开就能看的摘要',
+          problem: '当前问题',
+          inference: '系统推断',
+          why: '为什么值得看',
+          actions: '建议动作',
+          attached: '已挂载上下文',
+          runtime: '运行上下文与原始字段',
+          evidence: '拓扑、设备与变更证据',
+          confidence: '假设、置信度与控制点',
+          close: '关闭',
+        }
+      : {
+          title: 'Selected suggestion / evidence trace',
+          overview: 'At a glance',
+          problem: 'Current problem',
+          inference: 'System inference',
+          why: 'Why this matters',
+          actions: 'Recommended action',
+          attached: 'Attached evidence',
+          runtime: 'Runtime context and raw fields',
+          evidence: 'Topology, device, and change evidence',
+          confidence: 'Hypotheses, confidence, and control points',
+          close: 'Close',
+        }
+
   return (
     <aside className="drawer">
       <div className="drawer-scroll">
@@ -86,6 +154,35 @@ export function EvidenceDrawer({
             <span className="badge">{suggestion.context.provider}</span>
           </div>
         </div>
+
+        <section className="drawer-card drawer-overview-card">
+          <h3>{copy.overview}</h3>
+          <div className="drawer-overview-grid">
+            <article className="drawer-glance-card">
+              <span>{copy.problem}</span>
+              <strong>{humanReadableTitle(suggestion, locale)}</strong>
+              <p>{whyItMatters(suggestion)}</p>
+            </article>
+            <article className="drawer-glance-card">
+              <span>{copy.inference}</span>
+              <strong>{primaryHypothesis(suggestion, locale)}</strong>
+              <p>{suggestion.confidenceReason}</p>
+            </article>
+            <article className="drawer-glance-card">
+              <span>{copy.actions}</span>
+              <strong>{leadingAction(suggestion, locale)}</strong>
+              <p>{evidenceOverview(suggestion, locale)}</p>
+            </article>
+            <article className="drawer-glance-card">
+              <span>{copy.attached}</span>
+              <strong>{attachedEvidenceKinds(suggestion).join(' + ')}</strong>
+              <p>
+                service={suggestion.context.service} · src_device_key=
+                {suggestion.context.srcDeviceKey}
+              </p>
+            </article>
+          </div>
+        </section>
 
         <div className="drawer-summary-grid">
           <section className="drawer-card drawer-priority-card">

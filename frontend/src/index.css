@@ -9,6 +9,11 @@
   --bg-elevated: #0a0e13;
   --line-strong: rgba(157, 176, 196, 0.22);
   --line-soft: rgba(157, 176, 196, 0.12);
+  --plane-dark: #061017;
+  --plane-mid: #d9dde1;
+  --plane-light: #f6f8f9;
+  --plane-grid-major: rgba(11, 16, 21, 0.16);
+  --plane-grid-minor: rgba(255, 255, 255, 0.06);
   --text-main: #f2f7fb;
   --text-subtle: #bcc6d0;
   --text-dim: #6f7f8f;
@@ -61,8 +66,8 @@ body::before {
   position: fixed;
   inset: 0;
   pointer-events: none;
-  border: 1px solid rgba(255, 255, 255, 0.02);
-  opacity: 0.24;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  opacity: 0.34;
 }
 
 body::after {

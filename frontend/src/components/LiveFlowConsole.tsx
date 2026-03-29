@@ -4,6 +4,7 @@ import type {
   FeedEvent,
   RuntimeSnapshot,
   RuntimeStreamDelta,
+  StageLink,
   StageNode,
   StageTelemetry,
   StrategyControl,
@@ -17,6 +18,12 @@ import {
   parseTimestamp,
   timestampTooltip,
 } from '../utils/time'
+
+const TopologyCanvas = lazy(() =>
+  import('./TopologyCanvas').then((module) => ({
+    default: module.TopologyCanvas,
+  })),
+)
 
 interface LiveFlowConsoleProps {
   connectionState: RuntimeConnectionState
@@ -54,6 +61,18 @@ interface LifecyclePhase {
 interface LifecycleIntegrityIssue {
   id: string
   detail: string
+  severity: 'hard' | 'soft'
+}
+
+interface HistoricalIncidentEvent extends FeedEvent {
+  dedupeKey: string
+  mergedSuggestionCount: number
+  firstSeenTs: string
+  lastSeenTs: string
+  problem: string
+  inference: string
+  recommendation: string
+  scopeMeaning: string
 }
 
 interface GuidedStage {
@@ -382,58 +401,299 @@ function suggestionForEvent(
   return fallback
 }
 
-function eventPath(event: FeedEvent, linkedSuggestion: SuggestionRecord) {
-  if (event.kind === 'raw') {
-    return ['fortigate', 'ingest', 'forwarder', 'raw-topic']
+function canonicalDeviceIdentity(suggestion: SuggestionRecord) {
+  const srcmac = suggestion.evidenceBundle.device.srcmac
+  if (
+    typeof srcmac === 'string' &&
+    srcmac.trim().length > 0 &&
+    srcmac.trim().toLowerCase() !== 'none'
+  ) {
+    return srcmac.trim().toLowerCase()
   }
 
-  if (event.kind === 'alert') {
-    return ['raw-topic', 'correlator', 'alerts-topic', 'cluster-window']
+  const deviceName = suggestion.evidenceBundle.device.device_name
+  if (typeof deviceName === 'string' && deviceName.trim().length > 0) {
+    return deviceName.trim().toLowerCase()
   }
 
-  return linkedSuggestion.scope === 'cluster'
-    ? [
-        'alerts-topic',
-        'cluster-window',
-        'aiops-agent',
-        'suggestions-topic',
-        'remediation',
-      ]
-    : ['alerts-topic', 'aiops-agent', 'suggestions-topic', 'remediation']
+  return suggestion.context.srcDeviceKey.trim().toLowerCase()
 }
 
-function eventSummary(event: FeedEvent, linkedSuggestion: SuggestionRecord) {
-  if (event.kind === 'raw') {
-    return {
-      heading: 'raw ingest sample',
-      detail: `service=${event.service ?? 'unknown'} device=${event.device ?? 'unknown'} entered the live edge path.`,
-      annotations: [
-        `path=${eventPath(event, linkedSuggestion).join(' -> ')}`,
-        'status=awaiting deterministic correlation',
-      ],
-    }
+function incidentKeyForSuggestion(suggestion: SuggestionRecord) {
+  return [
+    suggestion.ruleId.trim().toLowerCase(),
+    suggestion.scope,
+    suggestion.context.service.trim().toLowerCase(),
+    canonicalDeviceIdentity(suggestion),
+  ].join('::')
+}
+
+function incidentProblemSummary(
+  suggestion: SuggestionRecord,
+  locale: 'en' | 'zh',
+) {
+  const ruleLabel = prettyRuleName(suggestion.ruleId)
+  const deviceLabel = friendlyDeviceName(suggestion)
+
+  if (locale === 'zh') {
+    return `${ruleLabel} 在 ${deviceLabel} 的 ${suggestion.context.service} 路径上命中了确定性阈值。`
   }
 
-  if (event.kind === 'alert') {
-    return {
-      heading: 'deterministic alert fired',
-      detail: event.detail,
-      annotations: [
-        `path=${eventPath(event, linkedSuggestion).join(' -> ')}`,
-        `evidence=${event.evidence ?? 'none'}`,
-      ],
-    }
+  return `${ruleLabel} crossed its deterministic threshold on ${deviceLabel} for ${suggestion.context.service}.`
+}
+
+function incidentInferenceSummary(
+  suggestion: SuggestionRecord,
+  locale: 'en' | 'zh',
+) {
+  const hypothesis = suggestion.hypotheses[0]
+  if (hypothesis) {
+    return hypothesis
   }
+
+  return locale === 'zh'
+    ? '当前没有单独的假设文本，先沿着附带证据继续检查。'
+    : 'No standalone hypothesis text is attached yet, so continue from the evidence already attached.'
+}
+
+function incidentScopeMeaning(
+  suggestion: SuggestionRecord,
+  locale: 'en' | 'zh',
+) {
+  if (suggestion.scope === 'cluster') {
+    return locale === 'zh'
+      ? '这表示同一键值的重复告警已经跨过聚合门槛，问题不再是单次孤立波动。'
+      : 'This means repeated same-key alerts crossed the cluster gate, so the issue is no longer an isolated one-off path.'
+  }
+
+  return locale === 'zh'
+    ? '这表示证据目前仍然集中在一条服务/设备路径上，还没有扩展成重复模式事件。'
+    : 'This means the evidence is still concentrated on one service/device path and has not widened into a repeated-pattern incident yet.'
+}
+
+function groupedRefreshLabel(
+  mergedSuggestionCount: number,
+  locale: 'en' | 'zh',
+) {
+  if (locale === 'zh') {
+    return mergedSuggestionCount > 1
+      ? `已合并 ${mergedSuggestionCount} 次建议刷新`
+      : '当前只有 1 次建议刷新'
+  }
+
+  return mergedSuggestionCount > 1
+    ? `merged ${mergedSuggestionCount} suggestion refreshes`
+    : 'single suggestion refresh'
+}
+
+function historicalIncidentQueue(
+  suggestions: SuggestionRecord[],
+  locale: 'en' | 'zh',
+): HistoricalIncidentEvent[] {
+  const sortedSuggestions = suggestions
+    .slice()
+    .sort((left, right) => {
+      const leftTs = parseTimestamp(left.suggestionTs)?.getTime() ?? 0
+      const rightTs = parseTimestamp(right.suggestionTs)?.getTime() ?? 0
+      return rightTs - leftTs
+    })
+
+  const groupedSuggestions = new Map<string, SuggestionRecord[]>()
+  sortedSuggestions.forEach((suggestion) => {
+    const key = incidentKeyForSuggestion(suggestion)
+    const existing = groupedSuggestions.get(key)
+    if (existing) {
+      existing.push(suggestion)
+      return
+    }
+    groupedSuggestions.set(key, [suggestion])
+  })
+
+  return Array.from(groupedSuggestions.entries()).map(([dedupeKey, bucket]) => {
+    const latestSuggestion = bucket[0]
+    const earliestSuggestion = bucket[bucket.length - 1]
+    const deviceLabel = friendlyDeviceName(latestSuggestion)
+    const refreshLabel = groupedRefreshLabel(bucket.length, locale)
+
+    return {
+      id: `incident-${dedupeKey}`,
+      dedupeKey,
+      stamp: latestSuggestion.suggestionTs,
+      kind: 'suggestion' as const,
+      title:
+        locale === 'zh'
+          ? `${latestSuggestion.context.service} 在 ${deviceLabel} 上出现问题`
+          : `${latestSuggestion.context.service} anomaly on ${deviceLabel}`,
+      detail:
+        locale === 'zh'
+          ? `${refreshLabel}；${incidentScopeMeaning(latestSuggestion, locale)}`
+          : `${refreshLabel}; ${incidentScopeMeaning(latestSuggestion, locale)}`,
+      scope: latestSuggestion.scope,
+      relatedAlertId: latestSuggestion.alertId,
+      relatedSuggestionId: latestSuggestion.id,
+      service: latestSuggestion.context.service,
+      device: deviceLabel,
+      provider: latestSuggestion.context.provider,
+      actionCount: String(latestSuggestion.recommendedActions.length),
+      hypothesisCount: String(latestSuggestion.hypotheses.length),
+      evidence: evidenceKinds(latestSuggestion).join(' + '),
+      mergedSuggestionCount: bucket.length,
+      firstSeenTs: earliestSuggestion.suggestionTs,
+      lastSeenTs: latestSuggestion.suggestionTs,
+      problem: incidentProblemSummary(latestSuggestion, locale),
+      inference: incidentInferenceSummary(latestSuggestion, locale),
+      recommendation: primaryRecommendation(latestSuggestion),
+      scopeMeaning: incidentScopeMeaning(latestSuggestion, locale),
+    }
+  })
+}
+
+function phasesForGuidedStage(
+  lifecycle: LifecyclePhase[],
+  selectedGuidedStage: GuidedStage,
+) {
+  return lifecycle.filter((phase) =>
+    phase.stageIds.some((stageId) => selectedGuidedStage.phaseIds.includes(stageId)),
+  )
+}
+
+function stageNodeTitle(
+  snapshot: RuntimeSnapshot,
+  stageId: string,
+  locale: 'en' | 'zh',
+) {
+  const matched = snapshot.stageNodes.find((node) => node.id === stageId)
+  if (matched) {
+    return matched.title
+  }
+  if (stageId === 'cluster-window') {
+    return locale === 'zh' ? '聚合窗口' : 'Cluster window'
+  }
+  return stageId
+}
+
+function stageNodeSubtitle(
+  snapshot: RuntimeSnapshot,
+  stageId: string,
+  locale: 'en' | 'zh',
+) {
+  const matched = snapshot.stageNodes.find((node) => node.id === stageId)
+  if (matched) {
+    return matched.subtitle
+  }
+  if (stageId === 'cluster-window') {
+    return locale === 'zh'
+      ? '相同键值重复统计'
+      : 'same-key aggregation window'
+  }
+  return locale === 'zh' ? '运行阶段' : 'runtime stage'
+}
+
+function stageNodeMetrics(
+  snapshot: RuntimeSnapshot,
+  stageId: string,
+  locale: 'en' | 'zh',
+  phase?: LifecyclePhase,
+) {
+  const matched = snapshot.stageNodes.find((node) => node.id === stageId)
+  if (matched) {
+    return matched.metrics
+  }
+
+  if (stageId === 'cluster-window') {
+    return [
+      {
+        label: locale === 'zh' ? '门槛' : 'gate',
+        value: phase?.band.value ?? 'n/a',
+      },
+      {
+        label: locale === 'zh' ? '说明' : 'detail',
+        value: phase?.band.detail ?? (locale === 'zh' ? '聚合窗口' : 'aggregation window'),
+      },
+    ]
+  }
+
+  return []
+}
+
+function stageLinkStateFromStatus(status: StageNode['status']): StageLink['state'] {
+  if (status === 'planned') {
+    return 'planned'
+  }
+
+  return status === 'steady' || status === 'watch' ? 'steady' : 'active'
+}
+
+function buildStageProcessGraph(
+  snapshot: RuntimeSnapshot,
+  selectedStagePhases: LifecyclePhase[],
+  locale: 'en' | 'zh',
+) {
+  const orderedStageIds = Array.from(
+    new Set(selectedStagePhases.flatMap((phase) => phase.stageIds)),
+  )
+
+  const graphNodes: StageNode[] = orderedStageIds.map((stageId, index) => {
+    const phase = selectedStagePhases.find((item) => item.stageIds.includes(stageId))
+    const matched = snapshot.stageNodes.find((node) => node.id === stageId)
+
+    return {
+      id: stageId,
+      title: stageNodeTitle(snapshot, stageId, locale),
+      subtitle:
+        matched?.subtitle ??
+        phase?.title ??
+        stageNodeSubtitle(snapshot, stageId, locale),
+      status: matched?.status ?? phase?.status ?? 'steady',
+      x: index * 290,
+      y: index % 2 === 0 ? 64 : 136,
+      metrics: stageNodeMetrics(snapshot, stageId, locale, phase).slice(0, 3),
+    }
+  })
+
+  const graphLinks: StageLink[] = orderedStageIds.slice(0, -1).map((stageId, index) => {
+    const target = orderedStageIds[index + 1]
+    const targetNode = graphNodes.find((node) => node.id === target)
+
+    return {
+      id: `selected-stage-link-${stageId}-${target}`,
+      source: stageId,
+      target,
+      state: stageLinkStateFromStatus(targetNode?.status ?? 'steady'),
+    }
+  })
 
   return {
-    heading: `${event.scope ?? 'alert'}-scope suggestion emitted`,
-    detail: event.detail,
-    annotations: [
-      `provider=${event.provider ?? linkedSuggestion.context.provider}`,
-      `actions=${event.actionCount ?? linkedSuggestion.recommendedActions.length}`,
-      `hypotheses=${event.hypothesisCount ?? linkedSuggestion.hypotheses.length}`,
-    ],
+    nodes: graphNodes,
+    links: graphLinks,
   }
+}
+
+function reconstructedTimeline(
+  linkedSuggestion: SuggestionRecord,
+  snapshot: RuntimeSnapshot,
+  lifecycle: LifecyclePhase[],
+) {
+  const existingTimeline =
+    linkedSuggestion.timeline && linkedSuggestion.timeline.length > 0
+      ? linkedSuggestion.timeline
+      : snapshot.timeline
+
+  if (existingTimeline.length > 0) {
+    return existingTimeline
+  }
+
+  return lifecycle.map((phase) => ({
+    id: `reconstructed-${phase.id}`,
+    stageId: phase.stageIds[0],
+    stamp:
+      phase.band.stamp ??
+      linkedSuggestion.suggestionTs ??
+      snapshot.runtime.latestSuggestionTs,
+    title: phase.title,
+    detail: `${phase.purpose} ${phase.facts.join(' · ')}`.trim(),
+    durationMs: phase.band.durationMs,
+  }))
 }
 
 function currentDayVolume(snapshot: RuntimeSnapshot) {
@@ -468,6 +728,7 @@ function lifecycleIntegrityIssues(
     issues.push({
       id: 'transport-issue',
       detail: transportIssue,
+      severity: 'hard',
     })
   }
   const missingTimeline = (linkedSuggestion.timeline?.length ?? 0) === 0
@@ -521,6 +782,73 @@ function primaryRecommendation(suggestion: SuggestionRecord) {
     suggestion.recommendedActions[0] ??
     'Inspect the evidence bundle before widening operator action.'
   )
+}
+
+function friendlyDeviceName(suggestion: SuggestionRecord) {
+  const deviceName = suggestion.evidenceBundle.device.device_name
+  if (typeof deviceName === 'string' && deviceName.trim().length > 0) {
+    return deviceName.trim()
+  }
+  return suggestion.context.srcDeviceKey
+}
+
+function prettyRuleName(ruleId: string) {
+  return ruleId
+    .replace(/_v\d+$/i, '')
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (char) => char.toUpperCase())
+}
+
+function storyScopeLabel(
+  suggestion: SuggestionRecord,
+  locale: 'en' | 'zh',
+) {
+  if (locale === 'zh') {
+    return suggestion.scope === 'cluster' ? '重复模式事件' : '单路径事件'
+  }
+  return suggestion.scope === 'cluster' ? 'repeated-pattern incident' : 'single-path incident'
+}
+
+function storyCopy(
+  suggestion: SuggestionRecord,
+  locale: 'en' | 'zh',
+): StoryCopy {
+  const deviceName = friendlyDeviceName(suggestion)
+  const scopeLabel = storyScopeLabel(suggestion, locale)
+  const ruleLabel = prettyRuleName(suggestion.ruleId)
+  const recentSimilar = suggestion.context.recentSimilar1h
+
+  if (locale === 'zh') {
+    return {
+      eyebrow: '当前运行事件',
+      headline: '重复 deny 流量',
+      headlineAccent: suggestion.context.service,
+      summary: `${deviceName} 的 ${suggestion.context.service} 在规则窗口内连续命中阈值，系统已给出一条可审查的${scopeLabel}建议。`,
+      whatHappenedLabel: '发生了什么',
+      whatHappened: `${ruleLabel} 在 ${friendlyDeviceName(suggestion)} 上被触发，当前焦点是 ${suggestion.context.service} 这条通信路径。`,
+      whyLabel: '为什么重要',
+      why: recentSimilar > 0
+        ? `过去 1 小时内还有 ${recentSimilar} 次相似告警，说明这不是一次孤立波动。`
+        : '这次告警已经附带设备、拓扑和变化上下文，可以直接进入判断。',
+      nextLabel: '下一步该做什么',
+      next: primaryRecommendation(suggestion),
+    }
+  }
+
+  return {
+    eyebrow: 'Live incident',
+    headline: 'Repeated deny bursts',
+    headlineAccent: `on ${suggestion.context.service}`,
+    summary: `${deviceName} crossed the rule threshold for ${suggestion.context.service}, and the system has prepared one ${scopeLabel} suggestion for review.`,
+    whatHappenedLabel: 'What happened',
+    whatHappened: `${ruleLabel} fired on ${friendlyDeviceName(suggestion)}. The current slice is the ${suggestion.context.service} traffic path.`,
+    whyLabel: 'Why it matters',
+    why: recentSimilar > 0
+      ? `${recentSimilar} similar alerts were seen in the last hour, so this is no longer a one-off spike.`
+      : 'Device, topology, and change context are already attached, so this incident is ready for review.',
+    nextLabel: 'What to do next',
+    next: primaryRecommendation(suggestion),
+  }
 }
 
 function evidenceKinds(suggestion: SuggestionRecord) {
@@ -640,6 +968,24 @@ function guidedStageIdForPhase(phaseId: string) {
   return 'guided-operator'
 }
 
+function localizedStageTitle(stageId: string, locale: 'en' | 'zh') {
+  const mapping: Record<
+    string,
+    {
+      en: string
+      zh: string
+    }
+  > = {
+    'guided-source': { en: 'Input Received', zh: '信号进入' },
+    'guided-alert': { en: 'Rule Threshold Hit', zh: '规则触发' },
+    'guided-cluster': { en: 'Pattern Check', zh: '模式检查' },
+    'guided-suggestion': { en: 'Suggestion Ready', zh: '建议生成' },
+    'guided-operator': { en: 'Human Review', zh: '人工处置' },
+  }
+
+  return mapping[stageId]?.[locale] ?? stageId
+}
+
 export function LiveFlowConsole({
   connectionState,
   snapshot,
@@ -650,36 +996,58 @@ export function LiveFlowConsole({
   locale,
 }: LiveFlowConsoleProps) {
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null)
-  const [expandedStageId, setExpandedStageId] = useState<string | null>(null)
+  const [expandedStageSelection, setExpandedStageSelection] = useState<{
+    suggestionId: string
+    stageId: string | null
+  } | null>(null)
+  const [isIncidentGraphExpanded, setIsIncidentGraphExpanded] = useState(false)
+  const stageDetailRef = useRef<HTMLElement | null>(null)
+  const pendingStageRevealRef = useRef(false)
 
-  const queueEvents = snapshot.feed.slice(0, 10)
+  const queueEvents = historicalIncidentQueue(snapshot.suggestions, locale)
   const compactMetrics = snapshot.overviewMetrics.filter((metric) =>
-    ['raw-freshness', 'backlog', 'current-day-volume', 'closure'].includes(
+    ['raw-freshness', 'alert-latest', 'suggestion-latest', 'closure'].includes(
       metric.id,
     ),
   )
 
   const activeEvent =
-    queueEvents.find((event) => event.id === selectedEventId) ?? queueEvents[0]
+    queueEvents.find((event) => event.id === selectedEventId) ??
+    queueEvents.find(
+      (event) => event.dedupeKey === incidentKeyForSuggestion(selectedSuggestion),
+    ) ??
+    queueEvents[0]
   const linkedSuggestion = suggestionForEvent(
     activeEvent,
     snapshot.suggestions,
     selectedSuggestion,
   )
+  const expandedStageId =
+    expandedStageSelection?.suggestionId === linkedSuggestion.id
+      ? expandedStageSelection.stageId
+      : null
   const lifecycle = buildLifecyclePhases(snapshot, linkedSuggestion)
   const pulseKind = pulseKindForDelta(latestDelta?.kind ?? snapshot.feed[0]?.kind)
   const pulseTone = toneForDelta(latestDelta?.kind ?? snapshot.feed[0]?.kind)
   const currentPhase = currentPhaseId(latestDelta?.kind, activeEvent?.kind ?? pulseKind)
-  const activeStageIndex = lifecycle.findIndex((phase) => phase.id === currentPhase)
-  const activeSummary = activeEvent
-    ? eventSummary(activeEvent, linkedSuggestion)
-    : null
   const guidedStages = buildGuidedStages(lifecycle)
   const activeGuidedStageId = guidedStageIdForPhase(currentPhase)
   const selectedGuidedStage =
     guidedStages.find(
       (stage) => stage.id === (expandedStageId ?? activeGuidedStageId),
     ) ?? guidedStages[0]
+  const selectedStagePhases = phasesForGuidedStage(lifecycle, selectedGuidedStage)
+  const selectedStageGraph = buildStageProcessGraph(
+    snapshot,
+    selectedStagePhases,
+    locale,
+  )
+  const incidentProcessGraph = buildStageProcessGraph(
+    snapshot,
+    lifecycle,
+    locale,
+  )
+  const incidentTimeline = reconstructedTimeline(linkedSuggestion, snapshot, lifecycle)
   const activeGuidedIndex = guidedStages.findIndex(
     (stage) => stage.id === activeGuidedStageId,
   )
@@ -711,9 +1079,81 @@ export function LiveFlowConsole({
     locale,
     transportIssue,
   )
+  const hardIntegrityIssues = integrityIssues.filter(
+    (issue) => issue.severity === 'hard',
+  )
+  const softIntegrityIssues = integrityIssues.filter(
+    (issue) => issue.severity === 'soft',
+  )
+  const clusterGateValue =
+    linkedSuggestion.stageTelemetry?.find(
+      (item) => item.stageId === 'cluster-window',
+    )?.value ??
+    (linkedSuggestion.context.clusterWindowSec > 0
+      ? `${linkedSuggestion.context.clusterSize}/${linkedSuggestion.context.clusterWindowSec}s`
+      : locale === 'zh'
+        ? '未达到自然聚合门槛'
+        : 'cluster gate not naturally met yet')
+  const selectedProblem =
+    activeEvent?.problem ?? incidentProblemSummary(linkedSuggestion, locale)
+  const selectedInference =
+    activeEvent?.inference ?? incidentInferenceSummary(linkedSuggestion, locale)
+  const selectedRecommendation =
+    activeEvent?.recommendation ?? primaryRecommendation(linkedSuggestion)
+  const selectedScopeMeaning =
+    activeEvent?.scopeMeaning ?? incidentScopeMeaning(linkedSuggestion, locale)
+  const selectedRefreshSummary = groupedRefreshLabel(
+    activeEvent?.mergedSuggestionCount ?? 1,
+    locale,
+  )
+  const selectedWindowSummary = activeEvent
+    ? `${formatMaybeTimestamp(activeEvent.firstSeenTs, 'time')} - ${formatMaybeTimestamp(activeEvent.lastSeenTs, 'time')}`
+    : `${formatMaybeTimestamp(linkedSuggestion.context.clusterFirstAlertTs, 'time')} - ${formatMaybeTimestamp(linkedSuggestion.context.clusterLastAlertTs, 'time')}`
+
+  useEffect(() => {
+    if (!pendingStageRevealRef.current) {
+      return
+    }
+
+    stageDetailRef.current?.scrollIntoView({
+      behavior: 'smooth',
+      block: 'start',
+    })
+    pendingStageRevealRef.current = false
+  }, [linkedSuggestion.id, selectedGuidedStage.id])
+
+  const selectIncident = (event: HistoricalIncidentEvent) => {
+    const nextSuggestion = suggestionForEvent(
+      event,
+      snapshot.suggestions,
+      selectedSuggestion,
+    )
+    setSelectedEventId(event.id)
+    setExpandedStageSelection(null)
+    if (nextSuggestion.id !== selectedSuggestion.id) {
+      onSelectSuggestion(nextSuggestion.id)
+    }
+  }
+
+  const handleSelectGuidedStage = (stageId: string) => {
+    if (selectedGuidedStage.id === stageId) {
+      stageDetailRef.current?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      })
+      return
+    }
+
+    pendingStageRevealRef.current = true
+    setExpandedStageSelection({
+      suggestionId: linkedSuggestion.id,
+      stageId,
+    })
+  }
+
   return (
     <section className="page console-page">
-      {integrityIssues.length > 0 ? (
+      {hardIntegrityIssues.length > 0 ? (
         <section className="section integrity-warning">
           <div className="section-header">
             <div>
@@ -732,15 +1172,15 @@ export function LiveFlowConsole({
             </span>
           </div>
           <ul className="integrity-list">
-            {integrityIssues.map((issue) => (
+            {hardIntegrityIssues.map((issue) => (
               <li key={issue.id}>{issue.detail}</li>
             ))}
           </ul>
         </section>
       ) : null}
 
-      <section className="section incident-overview">
-        <div className="section-header">
+      <section className="section story-stage-shell">
+        <div className="section-header story-stage-header">
           <div>
             <h2 className="section-title">
               {t('Guided Incident Overview', '引导式事件总览')}
@@ -889,20 +1329,36 @@ export function LiveFlowConsole({
               </p>
             </article>
           </div>
-        </div>
 
-        <div className="micro-metric-rail">
-          {compactMetrics.map((metric) => (
-            <div key={metric.id} className={`micro-metric state-${metric.state}`}>
-              <span>{metric.label}</span>
-              <strong>{metric.value}</strong>
-            </div>
-          ))}
+          <div className="story-axis">
+            {guidedStages.map((stage, index) => {
+              const isActive = stage.id === selectedGuidedStage.id
+              const isReached = index <= activeGuidedIndex
+              return (
+                <button
+                  key={stage.id}
+                  type="button"
+                  className={`story-axis-step state-${stage.status} tone-${stage.tone} ${isActive ? 'is-active' : ''} ${isReached ? 'is-reached' : ''}`}
+                  onClick={() => handleSelectGuidedStage(stage.id)}
+                >
+                  <span className="story-axis-index">
+                    {(index + 1).toString().padStart(2, '0')}
+                  </span>
+                  <strong>{localizedStageTitle(stage.id, locale)}</strong>
+                  <span className="story-axis-summary">{stage.summary}</span>
+                  <div className="story-axis-meta">
+                    <span>{stage.value}</span>
+                    <i aria-hidden="true" />
+                  </div>
+                </button>
+              )
+            })}
+          </div>
         </div>
       </section>
 
-      <section className="section guided-stage-section">
-        <div className="section-header">
+      <section className="section incident-pipeline-shell">
+        <div className="section-header incident-pipeline-header">
           <div>
             <h2 className="section-title">{t('Process To Result', '过程到结果')}</h2>
             <span className="section-subtitle">
@@ -960,7 +1416,15 @@ export function LiveFlowConsole({
             <span className={`signal-chip tone-${selectedGuidedStage.tone}`}>
               {selectedGuidedStage.value}
             </span>
+            <button
+              type="button"
+              className="story-stage-action is-bright"
+              onClick={() => setIsIncidentGraphExpanded(true)}
+            >
+              {locale === 'zh' ? '全屏展开流程图' : 'Expand Pipeline'}
+            </button>
           </div>
+        </div>
 
           <p className="guided-stage-detail-copy">{selectedGuidedStage.detail}</p>
 
@@ -981,25 +1445,17 @@ export function LiveFlowConsole({
               <span>{t('operator takeaway', '操作提示')}</span>
               <strong>{primaryRecommendation(linkedSuggestion)}</strong>
             </article>
-          </div>
 
-          <ul className="guided-stage-facts">
-            {selectedGuidedStage.facts.map((fact) => (
-              <li key={`${selectedGuidedStage.id}-${fact}`}>{fact}</li>
-            ))}
-          </ul>
-
-          {relatedTimelineSteps.length > 0 ? (
-            <ol className="guided-stage-timeline">
-              {relatedTimelineSteps.map((step) => (
-                <li key={`${selectedGuidedStage.id}-${step.id}`}>
-                  <span title={timestampTooltip(step.stamp)}>
-                    {formatMaybeTimestamp(step.stamp, 'time')}
-                  </span>
-                  <div>
-                    <strong>{step.title}</strong>
-                    <p>{step.detail}</p>
-                  </div>
+            <article className="incident-pipeline-card">
+              <span>{locale === 'zh' ? '事件窗口与含义' : 'event window and meaning'}</span>
+              <strong>{selectedWindowSummary}</strong>
+              <p>{selectedScopeMeaning}</p>
+              <ul className="incident-pipeline-list">
+                <li>{selectedRefreshSummary}</li>
+                <li>
+                  {locale === 'zh'
+                    ? `聚合门槛 ${clusterGateValue}`
+                    : `cluster gate ${clusterGateValue}`}
                 </li>
               ))}
             </ol>
@@ -1065,21 +1521,15 @@ export function LiveFlowConsole({
                   {linkedSuggestion.priority}
                 </span>
               </div>
-            </div>
 
-            <ol className="timeline-list">
-              {(linkedSuggestion.timeline ?? snapshot.timeline).map((step, index) => (
-                <li
-                  key={`${linkedSuggestion.id}-${step.id}`}
-                  className={`timeline-item ${index <= activeStageIndex ? 'is-active' : ''}`}
-                  style={{ animationDelay: `${index * 90}ms` }}
-                >
-                  <span className="timeline-stamp" title={timestampTooltip(step.stamp)}>
-                    {formatMaybeTimestamp(step.stamp)}
-                  </span>
-                  <div className="timeline-body">
-                    <h3>{step.title}</h3>
-                    <p>{step.detail}</p>
+              <Suspense
+                fallback={
+                  <div className="flow-frame">
+                    <div className="flow-surface chart-fallback">
+                      {locale === 'zh'
+                        ? '正在载入历史事件流程图...'
+                        : 'loading historical incident pipeline...'}
+                    </div>
                   </div>
                 </li>
               ))}
@@ -1167,25 +1617,34 @@ export function LiveFlowConsole({
                   Which repeated alert paths are closest to becoming cluster-scope suggestions.
                 </span>
               </div>
-              <span className="section-kicker">600s / min=3</span>
-            </div>
-            <ul className="cluster-list">
-              {snapshot.clusterWatch.map((item) => (
-                <li key={item.key} className="cluster-item">
-                  <div className="cluster-head">
-                    <div>
-                      <strong>{item.service}</strong>
-                      <span>{item.device}</span>
-                    </div>
-                    <span className="cluster-ratio">
-                      {item.progress}/{item.target}
+
+              {selectedStageGraph.nodes.length > 0 ? (
+                <section className="stage-process-graph-shell">
+                  <div className="stage-process-graph-copy">
+                    <span className="section-kicker">
+                      {locale === 'zh' ? '选中阶段图' : 'selected stage graph'}
                     </span>
+                    <p>
+                      {locale === 'zh'
+                        ? '这里只展开当前选中阶段涉及到的模块、主题与控制边界。'
+                        : 'This graph narrows the incident pipeline down to the modules, topics, and boundaries touched by the currently selected stage.'}
+                    </p>
                   </div>
-                  <div className="cluster-progress" aria-hidden="true">
-                    <span
-                      style={{
-                        width: `${Math.min(100, (item.progress / item.target) * 100)}%`,
-                      }}
+                  <Suspense
+                    fallback={
+                      <div className="flow-frame compact">
+                        <div className="flow-surface chart-fallback">
+                          {locale === 'zh'
+                            ? '正在载入阶段链路图...'
+                            : 'loading stage pipeline map...'}
+                        </div>
+                      </div>
+                    }
+                  >
+                    <TopologyCanvas
+                      compact
+                      nodes={selectedStageGraph.nodes}
+                      links={selectedStageGraph.links}
                     />
                   </div>
                   <p>
@@ -1214,62 +1673,51 @@ export function LiveFlowConsole({
               </span>
             </div>
 
-            {activeEvent && activeSummary ? (
-              <div key={activeEvent.id} className="event-focus-body">
-                <div className="event-focus-summary">
-                  <div className="event-focus-topline">
-                    <span className={`signal-chip tone-${activeEvent.kind}`}>
-                      {activeEvent.scope
-                        ? `${activeEvent.kind}/${activeEvent.scope}`
-                        : activeEvent.kind}
-                    </span>
-                    <span
-                      className="event-focus-stamp"
-                      title={timestampTooltip(activeEvent.stamp)}
-                    >
-                      {formatMaybeTimestamp(activeEvent.stamp, 'time')}
-                    </span>
-                  </div>
-                  <h3>{activeEvent.title}</h3>
-                  <p>{activeSummary.detail}</p>
+              <div className="pipeline-overlay-grid">
+                <div className="pipeline-overlay-graph">
+                  <Suspense
+                    fallback={
+                      <div className="flow-frame">
+                        <div className="flow-surface chart-fallback">
+                          {locale === 'zh' ? '正在载入全屏流程图...' : 'loading fullscreen pipeline...'}
+                        </div>
+                      </div>
+                    }
+                  >
+                    <TopologyCanvas
+                      nodes={incidentProcessGraph.nodes}
+                      links={incidentProcessGraph.links}
+                    />
+                  </Suspense>
                 </div>
 
-                <div className="event-focus-grid">
+                <aside className="pipeline-overlay-sidebar">
                   <article className="focus-card">
-                    <strong>{activeSummary.heading}</strong>
+                    <strong>{locale === 'zh' ? '事件摘要' : 'incident summary'}</strong>
                     <ul className="focus-list">
-                      {activeSummary.annotations.map((item) => (
-                        <li key={item}>{item}</li>
-                      ))}
+                      <li>{activeEvent?.title ?? linkedSuggestion.summary}</li>
+                      <li>{story.summary}</li>
+                      <li>{primaryRecommendation(linkedSuggestion)}</li>
                     </ul>
                   </article>
 
                   <article className="focus-card">
                     <strong>{t('linked analysis', '联动分析')}</strong>
                     <ul className="focus-list">
-                      <li>service={linkedSuggestion.context.service}</li>
-                      <li>device={linkedSuggestion.context.srcDeviceKey}</li>
-                      <li>confidence={linkedSuggestion.confidenceLabel}</li>
-                      <li>actions={linkedSuggestion.recommendedActions.length}</li>
+                      {incidentTimeline.map((step) => (
+                        <li key={`${linkedSuggestion.id}-overlay-${step.id}`}>
+                          {formatMaybeTimestamp(step.stamp, 'time')} · {step.title}
+                        </li>
+                      ))}
                     </ul>
                   </article>
-                </div>
-
-                <div className="event-path">
-                  {eventPath(activeEvent, linkedSuggestion).map((step, index) => (
-                    <div key={`${activeEvent.id}-${step}`} className="event-path-step">
-                      <span>{step}</span>
-                      {index < eventPath(activeEvent, linkedSuggestion).length - 1 ? (
-                        <i aria-hidden="true" />
-                      ) : null}
-                    </div>
-                  ))}
-                </div>
+                </aside>
               </div>
-            ) : null}
-          </section>
+            </section>
+          </div>
         </div>
-      </details>
+      ) : null}
+
     </section>
   )
 }
