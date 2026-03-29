@@ -375,7 +375,7 @@ function App() {
               onOpenRuntimeSheet={() => setShowSurfacePanel(true)}
             />
           ) : view === 'topology' ? (
-            <PipelineTopologyView snapshot={snapshot} />
+            <PipelineTopologyView snapshot={snapshot} locale={locale} />
           ) : (
             <Suspense
               fallback={

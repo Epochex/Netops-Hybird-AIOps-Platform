@@ -102,6 +102,37 @@ interface StoryCopy {
   next: string
 }
 
+interface ProjectorStation {
+  id: string
+  title: string
+  token: string
+  caption: string
+  detail: string
+  evidence: string[]
+  guidedStageId: string
+}
+
+const SCRAMBLE_GLYPHS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/+*-=<>'
+
+function scrambleProjectorText(target: string, progress: number) {
+  const revealCount = Math.floor(target.length * progress)
+
+  return target
+    .split('')
+    .map((char, index) => {
+      if (char === ' ') {
+        return ' '
+      }
+
+      if (index < revealCount) {
+        return char
+      }
+
+      return SCRAMBLE_GLYPHS[Math.floor(Math.random() * SCRAMBLE_GLYPHS.length)]
+    })
+    .join('')
+}
+
 function controlValue(controls: StrategyControl[], label: string) {
   return controls.find((control) => control.label === label)?.currentValue ?? 'n/a'
 }
@@ -866,17 +897,180 @@ function evidenceKinds(suggestion: SuggestionRecord) {
   ].filter((item): item is string => item !== null)
 }
 
-function whyThisMatters(suggestion: SuggestionRecord) {
-  const attached = evidenceKinds(suggestion)
-  const evidenceSummary =
-    attached.length > 0 ? attached.join(' + ') : 'minimal context'
-  const recentSimilar = suggestion.context.recentSimilar1h
+function compactEvidenceValue(
+  value: string | number | boolean | string[] | null | undefined,
+  locale: 'en' | 'zh',
+) {
+  if (Array.isArray(value)) {
+    const normalized = value.map((item) => item?.trim()).filter(Boolean)
+    return normalized.length > 0
+      ? normalized.slice(0, 2).join(' · ')
+      : locale === 'zh'
+        ? '未附带'
+        : 'not attached'
+  }
 
-  return `${suggestion.context.service} on ${suggestion.context.srcDeviceKey} reached ${suggestion.scope}-scope review with ${evidenceSummary} attached${recentSimilar > 0 ? ` and ${recentSimilar} similar alert(s) in the last hour` : ''}.`
+  if (typeof value === 'boolean') {
+    return locale === 'zh' ? (value ? '已附带' : '未附带') : value ? 'attached' : 'not attached'
+  }
+
+  if (typeof value === 'number') {
+    return `${value}`
+  }
+
+  if (typeof value === 'string' && value.trim().length > 0) {
+    return value.trim()
+  }
+
+  return locale === 'zh' ? '未附带' : 'not attached'
 }
 
-function judgmentSummary(suggestion: SuggestionRecord) {
-  return `${suggestion.priority} / ${suggestion.scope}-scope / ${suggestion.confidenceLabel}`
+function firstCompactRecordValue<
+  TValue extends string | number | boolean | string[] | null | undefined,
+>(
+  record: Record<string, TValue>,
+  keys: string[],
+  locale: 'en' | 'zh',
+) {
+  for (const key of keys) {
+    const value = record[key]
+    if (
+      value !== undefined &&
+      value !== null &&
+      (!(typeof value === 'string') || value.trim().length > 0)
+    ) {
+      return compactEvidenceValue(value, locale)
+    }
+  }
+
+  return locale === 'zh' ? '未附带' : 'not attached'
+}
+
+function buildProjectorStations(
+  suggestion: SuggestionRecord,
+  locale: 'en' | 'zh',
+  clusterGateValue: string,
+) {
+  const topology = suggestion.evidenceBundle.topology
+  const device = suggestion.evidenceBundle.device
+  const change = suggestion.evidenceBundle.change
+  const ruleLabel = prettyRuleName(suggestion.ruleId)
+  const deviceLabel = friendlyDeviceName(suggestion)
+  const hypothesis =
+    suggestion.hypotheses[0] ??
+    (locale === 'zh'
+      ? '当前没有单独假设，继续沿着附带证据检查。'
+      : 'No standalone hypothesis text is attached yet.')
+  const pathToken = [
+    firstCompactRecordValue(topology, ['srcip', 'src_device_key'], locale),
+    firstCompactRecordValue(topology, ['dstip', 'neighbor_refs', 'zone'], locale),
+  ].join(' -> ')
+
+  return [
+    {
+      id: 'projector-trigger',
+      title: locale === 'zh' ? '触发' : 'Trigger',
+      token: formatMaybeTimestamp(suggestion.suggestionTs, 'time'),
+      caption:
+        locale === 'zh'
+          ? '服务路径锁定'
+          : 'service lane armed',
+      detail:
+        locale === 'zh'
+          ? `${ruleLabel} 已经进入运行链路，当前切片锁定在这条服务路径。`
+          : `${ruleLabel} has entered the runtime path and the current slice is locked to this service lane.`,
+      evidence: [suggestion.context.service, deviceLabel],
+      guidedStageId: 'guided-source',
+    },
+    {
+      id: 'projector-aggregate',
+      title: locale === 'zh' ? '聚合' : 'Aggregate',
+      token: clusterGateValue,
+      caption: locale === 'zh' ? '聚合观察' : 'gate watch',
+      detail:
+        locale === 'zh'
+          ? suggestion.scope === 'cluster'
+            ? '重复键值已经跨过聚合门槛，系统把它当成模式事件。'
+            : '证据仍集中在单一路径上，系统还在观察是否形成重复模式。'
+          : suggestion.scope === 'cluster'
+            ? 'Repeated same-key evidence crossed the cluster gate and is now treated as a pattern incident.'
+            : 'Evidence is still concentrated on one path and the system is still watching for repeated pattern formation.',
+      evidence: [
+        storyScopeLabel(suggestion, locale),
+        clusterGateValue,
+      ],
+      guidedStageId:
+        suggestion.scope === 'cluster' ? 'guided-cluster' : 'guided-alert',
+    },
+    {
+      id: 'projector-path',
+      title: locale === 'zh' ? '路径' : 'Path',
+      token: compactEvidenceValue(topology.zone, locale),
+      caption:
+        locale === 'zh'
+          ? '拓扑路径已挂载'
+          : 'topology attached',
+      detail:
+        locale === 'zh'
+          ? `当前先看 ${pathToken} 这条主路径。`
+          : `The current review is centered on ${pathToken}.`,
+      evidence: [
+        firstCompactRecordValue(topology, ['srcip', 'src_device_key'], locale),
+        suggestion.context.service,
+        firstCompactRecordValue(topology, ['dstip', 'neighbor_refs', 'zone'], locale),
+      ],
+      guidedStageId: 'guided-source',
+    },
+    {
+      id: 'projector-device',
+      title: locale === 'zh' ? '设备/变更' : 'Device / Change',
+      token: firstCompactRecordValue(change, ['level', 'suspected_change'], locale),
+      caption:
+        locale === 'zh'
+          ? '画像与变更已挂载'
+          : 'fingerprint attached',
+      detail:
+        locale === 'zh'
+          ? `设备身份以 ${deviceLabel} 为主，变更信号帮助判断这是噪声还是姿态漂移。`
+          : `${deviceLabel} is the primary identity anchor, while change markers help decide whether this is noise or posture drift.`,
+      evidence: [
+        deviceLabel,
+        firstCompactRecordValue(device, ['device_role', 'vendor', 'family'], locale),
+        firstCompactRecordValue(change, ['change_refs', 'level', 'suspected_change'], locale),
+      ],
+      guidedStageId: 'guided-alert',
+    },
+    {
+      id: 'projector-inference',
+      title: locale === 'zh' ? '推断' : 'Inference',
+      token: suggestion.confidenceLabel,
+      caption:
+        locale === 'zh'
+          ? '主假设成立'
+          : 'lead hypothesis',
+      detail: hypothesis,
+      evidence: [
+        suggestion.priority.toUpperCase(),
+        suggestion.confidenceLabel,
+      ],
+      guidedStageId: 'guided-suggestion',
+    },
+    {
+      id: 'projector-action',
+      title: locale === 'zh' ? '动作' : 'Action',
+      token: compactEvidenceValue(suggestion.context.provider, locale),
+      caption:
+        locale === 'zh'
+          ? '首个动作出口'
+          : 'next move',
+      detail: primaryRecommendation(suggestion),
+      evidence: [
+        compactEvidenceValue(suggestion.context.provider, locale),
+        suggestion.context.service,
+      ],
+      guidedStageId: 'guided-operator',
+    },
+  ] satisfies ProjectorStation[]
 }
 
 function buildGuidedStages(lifecycle: LifecyclePhase[]): GuidedStage[] {
@@ -1000,13 +1194,14 @@ export function LiveFlowConsole({
   onOpenRuntimeSheet,
 }: LiveFlowConsoleProps) {
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null)
+  const [selectedProjectorId, setSelectedProjectorId] = useState<string | null>(null)
+  const [projectorTheme, setProjectorTheme] = useState<'calm' | 'alert'>('calm')
   const [expandedStageSelection, setExpandedStageSelection] = useState<{
     suggestionId: string
     stageId: string | null
   } | null>(null)
   const [isIncidentGraphExpanded, setIsIncidentGraphExpanded] = useState(false)
   const stageDetailRef = useRef<HTMLElement | null>(null)
-  const pendingStageRevealRef = useRef(false)
 
   const queueEvents = historicalIncidentQueue(snapshot.suggestions, locale)
   const compactMetrics = snapshot.overviewMetrics.filter((metric) =>
@@ -1052,10 +1247,12 @@ export function LiveFlowConsole({
     locale,
   )
   const incidentTimeline = reconstructedTimeline(linkedSuggestion, snapshot, lifecycle)
-  const activeGuidedIndex = guidedStages.findIndex(
-    (stage) => stage.id === activeGuidedStageId,
-  )
   const story = storyCopy(linkedSuggestion, locale)
+  const [scrambledHeadline, setScrambledHeadline] = useState(story.headline)
+  const [scrambledHeadlineAccent, setScrambledHeadlineAccent] = useState(
+    story.headlineAccent,
+  )
+  const hasMountedProjectorRef = useRef(false)
   const relatedTimelineSteps = incidentTimeline.filter(
     (step) => step.stageId && selectedGuidedStage.phaseIds.includes(step.stageId),
   )
@@ -1095,18 +1292,57 @@ export function LiveFlowConsole({
   const selectedWindowSummary = activeEvent
     ? `${formatMaybeTimestamp(activeEvent.firstSeenTs, 'time')} - ${formatMaybeTimestamp(activeEvent.lastSeenTs, 'time')}`
     : `${formatMaybeTimestamp(linkedSuggestion.context.clusterFirstAlertTs, 'time')} - ${formatMaybeTimestamp(linkedSuggestion.context.clusterLastAlertTs, 'time')}`
+  const projectorStations = buildProjectorStations(
+    linkedSuggestion,
+    locale,
+    clusterGateValue,
+  )
+  const selectedProjector =
+    projectorStations.find((station) => station.id === selectedProjectorId) ??
+    projectorStations.find(
+      (station) => station.guidedStageId === selectedGuidedStage.id,
+    ) ??
+    projectorStations[0]
+  const selectedProjectorIndex = projectorStations.findIndex(
+    (station) => station.id === selectedProjector.id,
+  )
 
   useEffect(() => {
-    if (!pendingStageRevealRef.current) {
+    if (!hasMountedProjectorRef.current) {
+      hasMountedProjectorRef.current = true
+      setScrambledHeadline(story.headline)
+      setScrambledHeadlineAccent(story.headlineAccent)
       return
     }
 
-    stageDetailRef.current?.scrollIntoView({
-      behavior: 'smooth',
-      block: 'start',
-    })
-    pendingStageRevealRef.current = false
-  }, [linkedSuggestion.id, selectedGuidedStage.id])
+    setProjectorTheme('alert')
+
+    let frame = 0
+    const totalFrames = 20
+    const scrambleTimer = window.setInterval(() => {
+      frame += 1
+      const progress = Math.min(frame / totalFrames, 1)
+      setScrambledHeadline(scrambleProjectorText(story.headline, progress))
+      setScrambledHeadlineAccent(
+        scrambleProjectorText(story.headlineAccent, progress),
+      )
+
+      if (progress >= 1) {
+        window.clearInterval(scrambleTimer)
+      }
+    }, 50)
+
+    const themeTimer = window.setTimeout(() => {
+      setProjectorTheme('calm')
+      setScrambledHeadline(story.headline)
+      setScrambledHeadlineAccent(story.headlineAccent)
+    }, 1800)
+
+    return () => {
+      window.clearInterval(scrambleTimer)
+      window.clearTimeout(themeTimer)
+    }
+  }, [linkedSuggestion.id, locale, story.headline, story.headlineAccent])
 
   const selectIncident = (event: HistoricalIncidentEvent) => {
     const nextSuggestion = suggestionForEvent(
@@ -1115,25 +1351,18 @@ export function LiveFlowConsole({
       selectedSuggestion,
     )
     setSelectedEventId(event.id)
+    setSelectedProjectorId(null)
     setExpandedStageSelection(null)
     if (nextSuggestion.id !== selectedSuggestion.id) {
       onSelectSuggestion(nextSuggestion.id)
     }
   }
 
-  const handleSelectGuidedStage = (stageId: string) => {
-    if (selectedGuidedStage.id === stageId) {
-      stageDetailRef.current?.scrollIntoView({
-        behavior: 'smooth',
-        block: 'start',
-      })
-      return
-    }
-
-    pendingStageRevealRef.current = true
+  const handleSelectProjectorStation = (station: ProjectorStation) => {
+    setSelectedProjectorId(station.id)
     setExpandedStageSelection({
       suggestionId: linkedSuggestion.id,
-      stageId,
+      stageId: station.guidedStageId,
     })
   }
 
@@ -1187,7 +1416,7 @@ export function LiveFlowConsole({
           </div>
         </div>
 
-        <div className="story-stage-canvas">
+        <div className={`story-stage-canvas projector-canvas is-${projectorTheme}-theme`}>
           <aside className="story-stage-darkside story-stage-rail">
             <div className="story-stage-tag">
               <span>{locale === 'zh' ? '事件队列' : 'event queue'}</span>
@@ -1206,8 +1435,8 @@ export function LiveFlowConsole({
               </span>
               <p>
                 {locale === 'zh'
-                  ? '这里的 1 行就是 1 个已聚合的历史事件。相同服务 / 设备 / 规则的重复 suggestion 会合并成一次事件刷新，不再把同一个问题刷成多条。'
-                  : 'Each row here is one grouped historical incident. Repeated suggestions for the same rule/service/device are merged into one incident instead of flooding the queue as duplicates.'}
+                  ? '这里每一行就是一个历史事件，不再把同一问题刷成多条。'
+                  : 'Each row is one grouped incident instead of a flood of duplicate suggestions.'}
               </p>
             </div>
 
@@ -1251,52 +1480,31 @@ export function LiveFlowConsole({
               })}
             </div>
 
-            <div className="story-stage-stack">
-              <article className="story-stage-card">
-                <span>{locale === 'zh' ? '发现的问题' : 'problem detected'}</span>
+            <article className="story-stage-abstract">
+              <div className="story-stage-abstract-row">
+                <span>{locale === 'zh' ? '问题' : 'problem'}</span>
                 <strong>{activeEvent?.title ?? story.whatHappened}</strong>
-                <p>{selectedProblem}</p>
-              </article>
-              <article className="story-stage-card">
-                <span>{locale === 'zh' ? '系统推断' : 'system inference'}</span>
+              </div>
+              <div className="story-stage-abstract-row">
+                <span>{locale === 'zh' ? '推断' : 'inference'}</span>
                 <strong>{selectedInference}</strong>
-                <p>{linkedSuggestion.confidenceReason}</p>
-              </article>
-              <article className="story-stage-card">
-                <span>{locale === 'zh' ? '建议动作' : 'recommended next action'}</span>
+              </div>
+              <div className="story-stage-abstract-row">
+                <span>{locale === 'zh' ? '动作' : 'action'}</span>
                 <strong>{selectedRecommendation}</strong>
-                <p>
+              </div>
+            </article>
+
+            {softIntegrityIssues.length > 0 ? (
+              <article className="story-stage-note-slim">
+                <span>{locale === 'zh' ? '运行提示' : 'runtime note'}</span>
+                <strong>
                   {locale === 'zh'
-                    ? `证据已附带 ${evidenceKinds(linkedSuggestion).join(' + ')}。`
-                    : `Evidence already attached: ${evidenceKinds(linkedSuggestion).join(' + ')}.`}
-                </p>
+                    ? '快照存在轻微时间窗偏差。'
+                    : 'The current snapshot still carries mild timing skew.'}
+                </strong>
               </article>
-              <article className="story-stage-card">
-                <span>
-                  {locale === 'zh'
-                    ? `${storyScopeLabel(linkedSuggestion, locale)}是什么意思`
-                    : `what ${storyScopeLabel(linkedSuggestion, locale)} means`}
-                </span>
-                <strong>{selectedRefreshSummary}</strong>
-                <p>{selectedScopeMeaning}</p>
-                <p>{selectedWindowSummary}</p>
-              </article>
-              {softIntegrityIssues.length > 0 ? (
-                <article className="story-stage-card story-stage-card-note">
-                  <span>{locale === 'zh' ? '运行提示' : 'runtime notes'}</span>
-                  <strong>
-                    {locale === 'zh'
-                      ? '实时连接已经恢复，但当前快照仍存在跨流时间窗偏差。'
-                      : 'Live transport has recovered, but the current snapshot still carries cross-stream timing skew.'}
-                  </strong>
-                  <ul className="story-note-list">
-                    {softIntegrityIssues.map((issue) => (
-                      <li key={issue.id}>{issue.detail}</li>
-                    ))}
-                  </ul>
-                </article>
-              ) : null}
-            </div>
+            ) : null}
 
             <div className="story-stage-mini-metrics">
               {compactMetrics.map((metric) => (
@@ -1308,120 +1516,121 @@ export function LiveFlowConsole({
             </div>
           </aside>
 
-          <div className="story-stage-center">
-            <div className={`story-focus-core tone-${selectedGuidedStage.tone}`}>
-              <span className="story-focus-kicker">
-                {locale === 'zh' ? '当前阶段' : 'current stage'}
-              </span>
-              <strong>{localizedStageTitle(selectedGuidedStage.id, locale)}</strong>
-              <p>{selectedGuidedStage.detail}</p>
+          <section className="incident-projector-shell">
+            <div className="incident-projector-head">
+              <div>
+                <p className="incident-projector-kicker">{story.eyebrow}</p>
+                <h3 className="incident-projector-headline">
+                  <span>{scrambledHeadline}</span>
+                  <span>{scrambledHeadlineAccent}</span>
+                </h3>
+              </div>
+
+              <div className="incident-projector-badges">
+                <span className="signal-chip tone-suggestion">
+                  {linkedSuggestion.context.service}
+                </span>
+                <span className="signal-chip tone-neutral">
+                  {friendlyDeviceName(linkedSuggestion)}
+                </span>
+                <span className="signal-chip tone-live">
+                  {storyScopeLabel(linkedSuggestion, locale)}
+                </span>
+                <span className="signal-chip tone-alert">
+                  {linkedSuggestion.confidenceLabel}
+                </span>
+              </div>
             </div>
 
-            <div className="story-focus-rings" aria-hidden="true">
-              <span />
-              <span />
-              <span />
-            </div>
+            <div className="incident-projector-stage">
+              <div className="incident-projector-beam" aria-hidden="true">
+                <span
+                  className="incident-projector-progress"
+                  style={{
+                    width: `${((selectedProjectorIndex + 1) / projectorStations.length) * 100}%`,
+                  }}
+                />
+                <span className="incident-projector-scan" />
+              </div>
 
-            <div className="story-center-line story-center-line-a" aria-hidden="true" />
-            <div className="story-center-line story-center-line-b" aria-hidden="true" />
-            <div className="story-center-line story-center-line-c" aria-hidden="true" />
-          </div>
+              <div className="incident-projector-path">
+                {projectorStations.map((station, index) => {
+                  const isActive = station.id === selectedProjector.id
+                  const isRaised = index % 2 === 0
+                  const isLit = index <= selectedProjectorIndex
 
-          <article className="story-stage-brightside">
-            <p className="story-hero-kicker">{story.eyebrow}</p>
-            <h3 className="story-hero-headline">
-              <span>{story.headline}</span>
-              <span>{story.headlineAccent}</span>
-            </h3>
-            <p className="story-hero-summary">{story.summary}</p>
+                  return (
+                    <button
+                      key={station.id}
+                      type="button"
+                      className={`incident-projector-node ${isActive ? 'is-active' : ''} ${isLit ? 'is-lit' : ''} ${isRaised ? 'is-raised' : 'is-lowered'}`}
+                      onClick={() => handleSelectProjectorStation(station)}
+                    >
+                      <span className="incident-projector-index">
+                        {(index + 1).toString().padStart(2, '0')}
+                      </span>
+                      <span className="incident-projector-dot" aria-hidden="true" />
+                      <span className="incident-projector-label">
+                        <strong>{station.title}</strong>
+                        <span>{station.token}</span>
+                      </span>
+                      <span className="incident-projector-caption">{station.caption}</span>
+                      {isActive ? (
+                        <span
+                          className={`incident-projector-annotation ${isRaised ? 'is-below' : 'is-above'}`}
+                        >
+                          <span className="incident-projector-annotation-copy">
+                            {station.detail}
+                          </span>
+                          <span className="incident-projector-chips">
+                            {station.evidence.slice(0, 3).map((item) => (
+                              <span
+                                key={`${station.id}-${item}`}
+                                className="incident-projector-chip"
+                              >
+                                {item}
+                              </span>
+                            ))}
+                          </span>
+                        </span>
+                      ) : null}
+                    </button>
+                  )
+                })}
+              </div>
 
-            <div className="story-badges story-badges-hero">
-              <span className="signal-chip tone-suggestion">
-                {linkedSuggestion.context.service}
-              </span>
-              <span className="signal-chip tone-neutral">
-                {friendlyDeviceName(linkedSuggestion)}
-              </span>
-              <span className="signal-chip tone-alert">
-                {linkedSuggestion.priority}
-              </span>
-              <span className="signal-chip tone-live">
-                {storyScopeLabel(linkedSuggestion, locale)}
-              </span>
-            </div>
-
-            <div className="story-insight-grid">
-              <article className="story-insight-card">
-                <span>{locale === 'zh' ? '系统判断' : 'system judgment'}</span>
-                <strong>{judgmentSummary(linkedSuggestion)}</strong>
-                <p>{linkedSuggestion.confidenceReason}</p>
-              </article>
-
-              <article className="story-insight-card">
-                <span>{locale === 'zh' ? '附带上下文' : 'attached context'}</span>
-                <strong>
-                  {evidenceKinds(linkedSuggestion).join(' + ') || 'minimal context'}
-                </strong>
-                <p>{whyThisMatters(linkedSuggestion)}</p>
-              </article>
-            </div>
-
-            <div className="story-hero-actions">
-              <button
-                type="button"
-                className="story-stage-action is-bright"
-                onClick={onOpenEvidence}
-              >
-                {locale === 'zh' ? '展开证据与建议' : 'Open evidence and actions'}
-              </button>
-              <button
-                type="button"
-                className="story-stage-action"
-                onClick={onOpenRuntimeSheet}
-              >
-                {locale === 'zh' ? '查看运行概览' : 'Open runtime sheet'}
-              </button>
-            </div>
-          </article>
-
-          <div className="story-axis-guide">
-            <span className="section-kicker">
-              {locale === 'zh'
-                ? '唯一可点击的 01-05'
-                : 'the only clickable 01-05 strip'}
-            </span>
-            <p>
-              {locale === 'zh'
-                ? '点击这里的阶段卡后，页面会自动跳到下面的“阶段拆解”。下方流程图区不再重复放一排 01-05。'
-                : 'Click a stage card here to jump straight into the stage breakdown below. The lower pipeline area no longer repeats another numbered 01-05 strip.'}
-            </p>
-          </div>
-
-          <div className="story-axis">
-            {guidedStages.map((stage, index) => {
-              const isActive = stage.id === selectedGuidedStage.id
-              const isReached = index <= activeGuidedIndex
-              return (
-                <button
-                  key={stage.id}
-                  type="button"
-                  className={`story-axis-step state-${stage.status} tone-${stage.tone} ${isActive ? 'is-active' : ''} ${isReached ? 'is-reached' : ''}`}
-                  onClick={() => handleSelectGuidedStage(stage.id)}
-                >
-                  <span className="story-axis-index">
-                    {(index + 1).toString().padStart(2, '0')}
+              <div className="incident-projector-toolbar">
+                <div className="incident-projector-toolbar-meta">
+                  <span className="section-kicker">
+                    {locale === 'zh' ? '当前投影' : 'current projection'}
                   </span>
-                  <strong>{localizedStageTitle(stage.id, locale)}</strong>
-                  <span className="story-axis-summary">{stage.summary}</span>
-                  <div className="story-axis-meta">
-                    <span>{stage.value}</span>
-                    <i aria-hidden="true" />
-                  </div>
-                </button>
-              )
-            })}
-          </div>
+                  <strong>{selectedProjector.title}</strong>
+                  <span>{selectedProjector.token}</span>
+                </div>
+                <div className="incident-projector-actions">
+                  <button
+                    type="button"
+                    className="story-stage-action is-bright"
+                    onClick={onOpenEvidence}
+                  >
+                    {locale === 'zh' ? '当前建议' : 'Current Brief'}
+                  </button>
+                  <button
+                    type="button"
+                    className="story-stage-action"
+                    onClick={() =>
+                      stageDetailRef.current?.scrollIntoView({
+                        behavior: 'smooth',
+                        block: 'start',
+                      })
+                    }
+                  >
+                    {locale === 'zh' ? '阶段拆解' : 'Stage Breakdown'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </section>
         </div>
       </section>
 
@@ -1541,8 +1750,8 @@ export function LiveFlowConsole({
                   </span>
                   <h4>
                     {locale === 'zh'
-                      ? '点击上方事件主画面里唯一可点击的 01-05 后，这里会自动跳到对应阶段，并展开动作链与证据读取。'
-                      : 'Click the only clickable 01-05 strip in the Incident Main Stage above and this area will jump to the matching stage, action chain, and evidence read.'}
+                      ? '点击上方投影路径上的节点后，这里会切到对应阶段，并展开动作链与证据读取。'
+                      : 'Click a projected node above and this area will switch to the matching stage, action chain, and evidence read.'}
                   </h4>
                 </div>
                 <span className={`signal-chip tone-${selectedGuidedStage.tone}`}>
