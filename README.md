@@ -3,21 +3,9 @@
 
 > Hybrid AIOps Platform: Deterministic Streaming Core + CPU Local LLM (On-Demand) + Multi-Agent Orchestration
 
-#### What This Repository Is Actually Building
+This repository implements a full NetOps / AIOps mainline. Real network-device syslog is first normalized into structured facts at the edge, then turned into deterministic alerts, persisted into audit and query surfaces, enriched into bounded AIOps suggestions, and finally projected into a read-only runtime console. The system design follows a fixed engineering order: raw logs become replayable system objects first, the first system-level judgment remains deterministic, persistence is split by operational purpose, model-driven reasoning starts from alert contracts, and the frontend renders evidence, context, and control boundaries within a read-only runtime surface.
 
-This repository builds a NetOps / AIOps system around a strict engineering order of operations:
-
-1. raw device logs must first become structured, replayable facts
-2. first-pass detection must remain deterministic and traceable
-3. alert persistence and hot retrieval must be stable before augmentation is trusted
-4. model-driven reasoning is allowed only after an alert contract already exists
-5. the operator surface must explain the chain honestly instead of pretending execution is already safe
-
-That order is the whole point of the architecture.
-The repository is not trying to prove that an LLM can say something plausible about network logs.
-It is trying to prove that a real network runtime can be turned into a stable data plane, and that bounded AIOps can then attach useful explanation and next-step guidance without damaging the realtime path.
-
-## System Topology
+## System Overview
 
 ```mermaid
 flowchart LR
@@ -37,73 +25,71 @@ flowchart LR
   M --> N
   K --> N
   N --> O[Operator console]
-  O -. explicit boundary .-> P[Approval / remediation plane]
+  O -. explicit boundary .-> P[approval / remediation plane]
 ```
 
-At a glance:
+The mainline starts with `edge/fortigate-ingest`, which handles file discovery, checkpoint movement, replay recovery, syslog parsing, and JSONL fact emission. At that point each event already has a stable `event_id`, normalized `event_ts`, a device-level grouping key, and file-level provenance. `edge/edge_forwarder` publishes those facts into `netops.facts.raw.v1`, which decouples edge-local file semantics from shared transport and core analytics. `core/correlator` consumes the normalized fact stream, applies quality gates, deterministic rules, and sliding windows, and emits `netops.alerts.v1` as the first system-level incident contract.
 
-- `edge/fortigate-ingest` turns vendor syslog into structured facts with replay semantics
-- `edge/edge_forwarder` moves those facts into the shared stream
-- `core/correlator` decides whether a deterministic rule threshold has been crossed
-- `core/alerts_sink` keeps an audit trail
-- `core/alerts_store` keeps a queryable history surface
-- `core/aiops_agent` turns alerts into evidence-backed suggestions
-- `frontend/gateway` projects all of that into a read-only runtime console
+The alert stream fans out into three downstream paths. `core/alerts_sink` writes hourly JSONL and preserves exact emitted runtime records for audit and replay. `core/alerts_store` writes the same alerts into ClickHouse and supports recent-history lookup, similar-alert counting, and context retrieval. `core/aiops_agent` starts from alerts, assembles evidence bundles from alert payload, topology, device, and history context, and emits alert-scope or cluster-scope suggestions. `frontend/gateway` reads those runtime artifacts together with deployment controls, assembles a unified `RuntimeSnapshot`, and streams the projected state to the operator console via `SSE`.
 
-## End-To-End Dataflow
+## System Design
 
-The easiest way to understand the repository is to follow the object that moves through it.
+### Design objectives and constraints
 
-```mermaid
-flowchart LR
-  A[Raw syslog line] --> B[Structured fact event]
-  B --> C[Deterministic alert]
-  C --> D[Persisted alert record]
-  C --> E[Evidence bundle]
-  E --> F[Structured suggestion]
-  D --> G[Runtime snapshot]
-  F --> G
-  G --> H[Operator-readable incident story]
-```
+The system is designed to solve a specific problem: convert real runtime network telemetry into a stable operational data plane that supports alert explanation, context retrieval, and bounded guidance. That problem imposes four constraints. Raw inputs come from real FortiGate runtime logs and must remain traceable to source files and parser decisions. The first system-level decision must stay deterministic so that thresholds, windows, and rule hits remain replayable and auditable. Persistence must serve both evidence retention and hot retrieval, which requires separate audit and query surfaces. The operator UI must show the evidence chain and the execution boundary clearly and consistently.
 
-The object changes meaning at each stage:
+### End-to-end object progression
 
-| Stage | Data object | Producer | Why this stage exists |
+| Stage | Runtime object | Producer | Operational role |
 | --- | --- | --- | --- |
-| Source | raw FortiGate syslog line | device / gateway | carries the original network event, but still in vendor-specific text form |
-| Edge fact | structured JSONL fact | `edge/fortigate-ingest` | normalizes time, identity, source metadata, and replay semantics |
-| Shared transport | Kafka fact record | `edge/edge_forwarder` | decouples edge file handling from core analytics |
-| Alert | structured alert contract | `core/correlator` | makes the first system-level judgment on a deterministic rule path |
-| Audit/query persistence | JSONL + ClickHouse alert record | `core/alerts_sink`, `core/alerts_store` | preserves evidence and enables recent-history lookup |
-| Suggestion input | evidence bundle + context | `core/aiops_agent` | compresses alert, topology, device, and history context into a bounded inference object |
-| Suggestion output | structured suggestion record | `core/aiops_agent` | turns an alert into operator-readable summary, confidence, hypotheses, and next actions |
-| UI view | `RuntimeSnapshot` | `frontend/gateway` | presents the chain as a readable runtime story rather than loose telemetry fragments |
+| Source | raw syslog line | device / gateway | original runtime evidence in vendor text form |
+| Edge fact | structured JSONL fact | `edge/fortigate-ingest` | normalized time, identity, provenance, replay semantics |
+| Shared fact | Kafka fact record | `edge/edge_forwarder` | shared transport object for core consumers |
+| Alert | deterministic alert contract | `core/correlator` | first system-level incident judgment |
+| Persistence | JSONL alert record + ClickHouse row | `core/alerts_sink`, `core/alerts_store` | audit retention, replay support, hot retrieval |
+| Suggestion | structured suggestion record | `core/aiops_agent` | bounded operator guidance tied to alerts or alert clusters |
+| Runtime view | `RuntimeSnapshot` | `frontend/gateway` | unified operator-facing state projection |
 
-## What Data Is Produced And Why It Matters
+Field-level references and large samples remain in:
+[FortiGate input field analysis](./documentation/FORTIGATE_INPUT_FIELD_ANALYSIS.md),
+[FortiGate parsed JSONL output sample](./documentation/FORTIGATE_PARSED_OUTPUT_SAMPLE.md).
 
-### 1. Structured Fact Events
+### Edge ingestion and normalization
 
-The edge layer is not just "tail a file and forward lines".
-It has to create a fact object that downstream systems can trust.
+`edge/fortigate-ingest` is the first hard system boundary. Its job covers field extraction, rotated-file handling, checkpoint progression, failure recovery, and replay semantics while producing a stable fact schema. The output facts carry normalized time, device identity, compact original key-value context, and file provenance so that every downstream module can recover where an event came from, when it happened, and how it should be replayed.
 
-Important fact-side responsibilities:
+### Shared transport and deterministic correlation
 
-- preserve source provenance such as file path, inode, and offset
-- normalize event time into a sortable `event_ts`
-- derive a stable `src_device_key` for device-level grouping
-- retain a compact `kv_subset` so parser evolution does not force every investigation back to the raw file
+`edge/edge_forwarder` moves parsed facts into `netops.facts.raw.v1`, after which the repository treats events as shared runtime objects. `core/correlator` consumes that stream and performs the first system-level judgment through quality gates, deterministic rule evaluation, and sliding-window aggregation. This choice preserves replayability and auditability under real traffic and keeps the hot path explainable in terms of thresholds and rule profiles.
 
-The full field tables are in:
+### Persistence and context retrieval
 
-- [FortiGate input field analysis](./documentation/FORTIGATE_INPUT_FIELD_ANALYSIS.md)
-- [FortiGate parsed JSONL output sample](./documentation/FORTIGATE_PARSED_OUTPUT_SAMPLE.md)
+`core/alerts_sink` and `core/alerts_store` form the persistence layer but serve different jobs. The sink preserves emitted runtime records as hourly JSONL, which makes audit, replay, and evidence inspection possible. The store writes the same alerts into ClickHouse, which supports recent-similar lookup, history-window queries, and context assembly for downstream consumers. This dual-surface design keeps evidence preservation and retrieval optimization from interfering with each other.
 
-### 2. Deterministic Alerts
+### Bounded AIOps suggestion layer
 
-The alert object is the repository's first real incident contract.
-It is where "there was traffic" becomes "the system has determined something crossed policy or threshold".
+`core/aiops_agent` starts from alerts. It builds evidence bundles from alert payload, topology context, device profile, recent history, and cluster context, then emits structured suggestions. This placement constrains the model input to already-qualified incidents, gives inference a denser and better-aligned contract, and keeps realtime detection independent from model latency and prompt variance. The current implementation supports both alert-scope and cluster-scope suggestions and persists them to Kafka and JSONL.
 
-A current mounted-runtime alert sample looks like this:
+### Runtime projection and operator console
+
+The runtime gateway reads alert JSONL, suggestion JSONL, and deployment controls, then assembles a unified `RuntimeSnapshot`. The frontend consumes that snapshot and stream deltas directly. This projection allows the console to render freshness, incident volume, evidence coverage, lifecycle telemetry, and control boundaries in one process-oriented view. The UI presents how incidents are discovered, persisted, explained, and bounded within one surface.
+
+## Component Inputs, Outputs, And Responsibilities
+
+| Component | Main inputs | Main outputs | Core responsibility |
+| --- | --- | --- | --- |
+| `edge/fortigate-ingest` | FortiGate syslog, rotated files, checkpoints | parsed fact JSONL | parse logs, preserve replay semantics, retain provenance |
+| `edge/edge_forwarder` | parsed fact JSONL | `netops.facts.raw.v1` | move edge facts into shared transport |
+| `core/correlator` | `netops.facts.raw.v1` | `netops.alerts.v1` | run quality gates, deterministic rules, windowed alert generation |
+| `core/alerts_sink` | `netops.alerts.v1` | hourly alert JSONL | preserve emitted runtime records for audit and replay |
+| `core/alerts_store` | `netops.alerts.v1` | ClickHouse alert rows | support history lookup and context retrieval |
+| `core/aiops_agent` | alerts, history, topology, device context | `netops.aiops.suggestions.v1`, suggestion JSONL | assemble evidence bundles and emit bounded structured guidance |
+| `frontend/gateway` | alerts, suggestions, deployment controls | `RuntimeSnapshot`, SSE stream | project runtime artifacts into a frontend state model |
+| `frontend` | snapshot, stream deltas | runtime console | render incident flow, evidence, lifecycle, and control boundaries |
+
+## Representative Runtime Records
+
+A mounted-runtime alert sample currently looks like this:
 
 ```json
 {
@@ -111,7 +97,11 @@ A current mounted-runtime alert sample looks like this:
   "alert_ts": "2026-03-26T18:56:04+00:00",
   "rule_id": "deny_burst_v1",
   "severity": "warning",
-  "metrics": { "deny_count": 321, "window_sec": 60, "threshold": 200 },
+  "metrics": {
+    "deny_count": 321,
+    "window_sec": 60,
+    "threshold": 200
+  },
   "event_excerpt": {
     "action": "deny",
     "srcip": "5.188.206.46",
@@ -127,31 +117,7 @@ A current mounted-runtime alert sample looks like this:
 }
 ```
 
-Why this matters:
-
-- `metrics` tells you exactly why the rule fired
-- `event_excerpt` preserves the local incident shape
-- `topology_context`, `device_profile`, and `change_context` turn a raw rule hit into something that can be localized and investigated
-
-### 3. Persisted Alert Products
-
-The same alert is stored twice because the two jobs are different.
-
-| Product | Path / system | Why it exists |
-| --- | --- | --- |
-| Alert JSONL | `/data/netops-runtime/alerts/alerts-*.jsonl` | audit trail, replay, exact emitted record retention |
-| Alert table rows | ClickHouse via `core/alerts_store` | recent-history retrieval, similar-alert lookup, context assembly |
-
-This dual storage is not duplication by accident.
-JSONL is the evidence surface.
-ClickHouse is the retrieval surface.
-
-### 4. Structured Suggestions
-
-Suggestions are not free-form chat outputs.
-They are structured runtime products emitted after the system has already established that an alert exists.
-
-A current mounted-runtime suggestion sample looks like this:
+This alert already carries threshold conditions, local incident shape, and network placement. A mounted-runtime suggestion sample currently looks like this:
 
 ```json
 {
@@ -171,186 +137,23 @@ A current mounted-runtime suggestion sample looks like this:
 }
 ```
 
-Why this matters:
+The suggestion remains tied to the alert and preserves scope, priority, summary, and compact context. The console consumes structured guidance with explicit source and scope.
 
-- the output already points back to a specific alert
-- the suggestion remains bounded to alert context instead of pretending to replace the detection path
-- the operator gets summary, priority, hypotheses, and recommended actions in a stable schema
+## Deployment Planes And Explicit Boundaries
 
-## How The Components Connect
+The current system naturally separates into three runtime planes. The edge ingestion plane handles near-source parsing, checkpoints, and fact generation. The core streaming plane handles Kafka facts, deterministic correlation, audit persistence, ClickHouse retrieval, and AIOps suggestion generation. The runtime projection plane assembles mounted artifacts and deployment controls into a console-facing state model. This separation supports both distributed deployment and single-host demo operation while preserving one stable set of data contracts.
 
-The repository is easiest to reason about if we explain each component in relation to the next one it feeds.
+The first decision point remains deterministic because the current phase still depends on a stable raw-to-alert path under real traffic, replay validation, and rule tuning. The AIOps layer sits downstream of alerts because device fields, timestamps, rule outcomes, and recent history are already aligned there in a compact contract. The frontend stays read-only because observation, explanation, and execution belong to different risk classes. Current delivery covers investigation support, incident explanation, context retrieval, and structured guidance. Approval-driven execution, rollback-aware write paths, device mutation, and remediation automation remain outside the delivered boundary.
 
-### Edge Layer
+## Current Progress
 
-#### `edge/fortigate-ingest`
+The currently mounted workspace exposes `/data/netops-runtime` alert and suggestion artifacts together with the current repository codebase. In this mounted dataset, the alert sink covers `554` hourly files with `152,481` alert records from `2026-03-04T15:09:11+00:00` to `2026-03-27T23:00:17+00:00`. The suggestion sink covers `480` hourly files from `2026-03-09T05:08:56.549849+00:00` to `2026-03-31T15:36:55.895982+00:00`. The last 24 mounted alert partitions contain `2067` `deny_burst_v1` warnings and `2` `bytes_spike_v1` critical alerts. The last 24 mounted suggestion partitions contain `9058` alert-scope suggestions and `1353` cluster-scope suggestions, all from the current `template` provider. A live `/data/fortigate-runtime` volume is unavailable in this mount, so raw-edge freshness and full cross-layer time alignment are not directly measurable from mounted artifacts alone. The current verification baseline is `33` collected tests across `tests/core` and the two frontend runtime snapshot and stream tests.
 
-This is the boundary between messy device reality and reusable system facts.
+## Evaluation Surfaces
 
-It is responsible for:
+The repository already exposes several concrete measurement surfaces for later paper evaluation. The edge layer can be evaluated on field coverage, parse success rate, checkpoint correctness, and replay correctness. The deterministic alert layer can be evaluated on end-to-end alert latency, rule-hit distribution, window aggregation correctness, and freshness. The persistence layer can be evaluated on emitted-record retention, query latency, and recent-similar lookup effectiveness. The suggestion layer can be evaluated on suggestion latency, scope distribution, provider stability, and context completeness. The runtime console can be evaluated on snapshot completeness, SSE freshness, timeline coverage, and operator-visible lifecycle consistency.
 
-- scanning active and rotated FortiGate log files
-- preserving checkpoint and replay semantics
-- parsing syslog + FortiGate key-value payload
-- writing parsed facts as JSONL
-- keeping enough provenance for later audit and failure recovery
-
-It does not decide whether an incident exists.
-It only decides whether the raw line can be converted into a stable fact object.
-
-#### `edge/edge_forwarder`
-
-This component exists to separate file semantics from transport semantics.
-
-It:
-
-- reads parsed JSONL facts
-- forwards them into `netops.facts.raw.v1`
-- preserves event meaning rather than reinterpreting it
-
-Without this separation, core analytics would inherit edge-local file handling logic.
-
-### Core Layer
-
-#### `core/correlator`
-
-This is the realtime decision point.
-
-It:
-
-- consumes structured facts from `netops.facts.raw.v1`
-- applies quality gates
-- runs deterministic rules and sliding windows
-- emits `netops.alerts.v1`
-
-This is the most important architectural line in the repository:
-the first judgment that "this is now an alert" stays deterministic.
-That is why the system can still be replayed, audited, and tuned at the rule level.
-
-#### `core/alerts_sink`
-
-This is the long audit memory of the alert stream.
-
-It:
-
-- consumes `netops.alerts.v1`
-- writes hourly JSONL
-- preserves emitted alerts as they actually appeared at runtime
-
-This is what lets the repository talk about alert history without depending only on dashboards or mutable query results.
-
-#### `core/alerts_store`
-
-This is the hot retrieval surface.
-
-It:
-
-- consumes `netops.alerts.v1`
-- stores structured alert rows in ClickHouse
-- supports recent-similar lookups and history queries used by later stages
-
-Without it, every history lookup would degrade into scanning files.
-
-#### `core/aiops_agent`
-
-This is the bounded augmentation layer.
-
-It:
-
-- consumes alerts, not raw logs
-- assembles evidence bundles from alert payload, history, topology, device, and change context
-- emits both alert-scope and cluster-scope suggestions
-- persists suggestion JSONL for auditability
-
-It does not replace the correlator.
-It explains and extends the alert once the alert already exists.
-
-### Frontend And Projection Layer
-
-#### `frontend/gateway`
-
-The gateway is a projection builder, not a system of record.
-
-It:
-
-- reads alert JSONL, suggestion JSONL, and deployment controls
-- assembles a `RuntimeSnapshot`
-- streams updates over `SSE`
-
-This keeps the frontend honest: the UI reflects runtime artifacts instead of inventing a separate truth model.
-
-#### `frontend`
-
-The React console is process-oriented rather than panel-oriented.
-
-It is meant to answer:
-
-- where in the chain is the current incident shape visible
-- what evidence is present or missing
-- what did the system infer, and from which alert context
-- where does explanation stop and control begin
-
-The important thing is not just that the page renders.
-It is that the page makes the system's boundary legible.
-
-## Current Runtime Facts From Mounted Data
-
-The facts below are derived from the currently mounted `/data/netops-runtime` data on this workspace.
-
-| Runtime slice | Observed fact |
-| --- | --- |
-| Alert sink coverage | `554` hourly files, `152,481` alert records |
-| Alert sink time range | `2026-03-04T15:09:11+00:00` to `2026-03-27T23:00:17+00:00` |
-| Suggestion sink coverage | `480` hourly files |
-| Suggestion sink time range | `2026-03-09T05:08:56.549849+00:00` to `2026-03-31T15:36:55.895982+00:00` |
-| Latest 6 alert partitions | `504` alerts over `2026-03-27T18:00:14+00:00` to `2026-03-27T23:00:17+00:00` |
-| Latest 6 suggestion partitions | `3,703` suggestions over `2026-03-31T10:00:16.165096+00:00` to `2026-03-31T15:36:55.895982+00:00` |
-| Last 24 alert partitions | `warning=2067`, `critical=2` |
-| Last 24 alert rules | `deny_burst_v1=2067`, `bytes_spike_v1=2` |
-| Last 24 suggestion scopes | `alert=9058`, `cluster=1353` |
-| Last 24 suggestion provider | `template=10411` |
-
-One important honesty note:
-the currently mounted runtime is not a perfectly time-aligned live snapshot across all layers.
-The latest suggestion records still mostly reference March 26 alert context, while the latest mounted alert file stops on March 27.
-That means the repository demonstrates continuous output products, but this particular mounted dataset should not be described as a perfectly synchronized live pipeline image.
-
-## What The Final Products Mean For An Operator
-
-By the time data reaches the console, the system has already turned a device log into four different levels of meaning:
-
-| Product | Meaning to the operator |
-| --- | --- |
-| Raw-derived fact | "this event existed and can be traced back to source" |
-| Deterministic alert | "the system can justify why this crossed a threshold or rule" |
-| Evidence bundle | "the alert has enough topology, device, and history context to investigate" |
-| Suggestion | "the system can summarize what likely matters next without pretending it has already executed anything" |
-
-That is why the frontend keeps the remediation boundary explicit.
-The system can already explain an incident path.
-It does not yet claim a safe write-back path.
-
-## Landed Scope And Explicit Boundary
-
-What is landed:
-
-- replay-aware FortiGate ingest
-- structured fact forwarding into Kafka
-- deterministic alerting
-- alert audit JSONL
-- ClickHouse-backed hot alert retrieval
-- bounded alert-scope and cluster-scope suggestion emission
-- read-only runtime console and thin gateway
-
-What remains explicitly outside the current delivered path:
-
-- device write-back
-- approval-driven execution control
-- automatic remediation
-- full-stream model judgment
-- any claim that the current UI is already a closed-loop control plane
-
-## Verification Entry Points
+## Verification
 
 ```bash
 python3 -m pytest -q tests/core
@@ -359,19 +162,3 @@ python3 -m compileall -q core edge frontend/gateway
 python3 -m core.benchmark.live_runtime_check
 cd frontend && npm run build
 ```
-
-Current collected test baseline:
-
-- `33` tests across `tests/core` plus the two runtime-console tests
-
-## More Detailed Docs
-
-- [Current project state](./documentation/PROJECT_STATE_EN.md)
-- [Controlled validation log](./documentation/CONTROLLED_VALIDATION_20260322.md)
-- [Frontend runtime architecture](./documentation/FRONTEND_RUNTIME_ARCHITECTURE_20260328_EN.md)
-- [Edge runtime guide](./documentation/EDGE_RUNTIME_GUIDE.md)
-- [Core runtime guide](./documentation/CORE_RUNTIME_GUIDE.md)
-- [Frontend workspace guide](./documentation/FRONTEND_WORKSPACE_GUIDE.md)
-- [FortiGate input field analysis](./documentation/FORTIGATE_INPUT_FIELD_ANALYSIS.md)
-- [FortiGate parsed JSONL output sample](./documentation/FORTIGATE_PARSED_OUTPUT_SAMPLE.md)
-- [FortiGate ingest field reference](./documentation/FORTIGATE_INGEST_FIELD_REFERENCE_EN.md)
