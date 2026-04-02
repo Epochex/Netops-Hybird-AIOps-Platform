@@ -1,4 +1,11 @@
-import { lazy, Suspense, useEffect, useRef, useState } from 'react'
+import {
+  lazy,
+  Suspense,
+  useEffect,
+  useRef,
+  useState,
+  type RefObject,
+} from 'react'
 import type { RuntimeConnectionState } from '../hooks/useRuntimeSnapshot'
 import type {
   FeedEvent,
@@ -33,6 +40,7 @@ interface LiveFlowConsoleProps {
   locale: 'en' | 'zh'
   onOpenEvidence: () => void
   onOpenRuntimeSheet: () => void
+  heroStageRef?: RefObject<HTMLElement | null>
 }
 
 interface LifecycleBand {
@@ -1186,6 +1194,7 @@ export function LiveFlowConsole({
   locale,
   onOpenEvidence,
   onOpenRuntimeSheet,
+  heroStageRef,
 }: LiveFlowConsoleProps) {
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null)
   const [selectedProjectorId, setSelectedProjectorId] = useState<string | null>(null)
@@ -1395,7 +1404,11 @@ export function LiveFlowConsole({
         </section>
       ) : null}
 
-      <section className="section story-stage-shell">
+      <section
+        ref={heroStageRef}
+        id="runtime-main-stage"
+        className="section story-stage-shell"
+      >
         <div className="section-header story-stage-header">
           <div>
             <h2 className="section-title">

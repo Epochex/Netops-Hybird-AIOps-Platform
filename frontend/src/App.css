@@ -17,34 +17,41 @@
 
 .app-shell::before {
   background:
-    radial-gradient(circle at 16% 18%, rgba(105, 249, 255, 0.08), transparent 28%),
-    radial-gradient(circle at 84% 12%, rgba(255, 137, 61, 0.08), transparent 24%),
-    radial-gradient(circle at 52% 78%, rgba(111, 255, 174, 0.06), transparent 32%);
-  animation: ambientShift 18s linear infinite alternate;
+    radial-gradient(circle at 12% 18%, rgba(105, 249, 255, 0.13), transparent 26%),
+    radial-gradient(circle at 82% 14%, rgba(255, 137, 61, 0.09), transparent 23%),
+    radial-gradient(circle at 56% 82%, rgba(111, 255, 174, 0.08), transparent 28%),
+    linear-gradient(135deg, rgba(5, 9, 14, 0.98), rgba(7, 12, 18, 0.94) 42%, rgba(8, 13, 18, 0.98));
+  transform: scale(1.04);
+  animation: ambientFieldDrift 24s ease-in-out infinite alternate;
 }
 
 .app-shell::after {
   background:
+    radial-gradient(circle at 58% 32%, rgba(255, 255, 255, 0.06), transparent 24%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 18%, transparent 82%, rgba(0, 0, 0, 0.24)),
+    repeating-linear-gradient(
+      90deg,
+      rgba(255, 255, 255, 0.025) 0,
+      rgba(255, 255, 255, 0.025) 1px,
+      transparent 1px,
+      transparent 72px
+    ),
     linear-gradient(
-      180deg,
-      transparent 0%,
-      rgba(105, 249, 255, 0.02) 34%,
-      rgba(105, 249, 255, 0.1) 46%,
-      rgba(255, 137, 61, 0.06) 49%,
-      rgba(105, 249, 255, 0.02) 52%,
-      transparent 66%
+      90deg,
+      rgba(105, 249, 255, 0.045) 0%,
+      transparent 22%,
+      transparent 78%,
+      rgba(255, 137, 61, 0.035) 100%
     ),
     repeating-linear-gradient(
       180deg,
-      rgba(255, 255, 255, 0.02) 0,
-      rgba(255, 255, 255, 0.02) 1px,
+      rgba(255, 255, 255, 0.025) 0,
+      rgba(255, 255, 255, 0.025) 1px,
       transparent 1px,
-      transparent 7px
+      transparent 72px
     );
-  mix-blend-mode: screen;
-  opacity: 0.68;
-  transform: translate3d(0, -120%, 0) skewY(-5deg);
-  animation: scanSweep 7.2s steps(24, end) infinite;
+  opacity: 0.6;
+  animation: ambientGridFloat 20s linear infinite alternate;
 }
 
 .utility-rail {
@@ -62,6 +69,51 @@
     rgba(5, 8, 12, 0.96);
   backdrop-filter: blur(14px);
   box-shadow: 0 18px 42px rgba(0, 0, 0, 0.22);
+}
+
+.surface-dock {
+  position: fixed;
+  inset: 0.9rem 1rem auto;
+  z-index: 38;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.9rem;
+  padding: 0.7rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background:
+    linear-gradient(135deg, rgba(7, 10, 14, 0.88), rgba(6, 10, 14, 0.74)),
+    rgba(6, 9, 12, 0.88);
+  backdrop-filter: blur(18px) saturate(135%);
+  box-shadow:
+    0 22px 50px rgba(0, 0, 0, 0.32),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  transition:
+    transform 260ms ease,
+    opacity 220ms ease,
+    border-color 220ms ease,
+    box-shadow 220ms ease;
+}
+
+.surface-dock::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border: 1px solid rgba(105, 249, 255, 0.06);
+  background:
+    linear-gradient(90deg, rgba(105, 249, 255, 0.08), transparent 28%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 62%);
+  pointer-events: none;
+}
+
+.surface-dock > * {
+  position: relative;
+  z-index: 1;
+}
+
+.surface-dock.is-hidden {
+  transform: translate3d(0, -120%, 0);
+  opacity: 0;
+  pointer-events: none;
 }
 
 .surface-dock-brand {
@@ -3315,6 +3367,8 @@
   border-right: none;
   border-top: none;
   background: transparent;
+  scroll-margin-top: 0.7rem;
+  transition: transform 240ms ease;
 }
 
 .support-stage-shell {
@@ -3562,16 +3616,22 @@
 }
 
 .story-stage-header {
-  padding: 5.85rem 1.25rem 0.6rem;
-  transition: padding-top 220ms ease;
+  padding: 4.4rem 1.25rem 0.8rem;
+  min-height: 8.75rem;
+  align-items: end;
+  transition:
+    padding-top 220ms ease,
+    min-height 220ms ease,
+    opacity 220ms ease;
 }
 
 .app-shell.dock-collapsed .story-stage-header {
-  padding-top: 1rem;
+  padding-top: 0.9rem;
+  min-height: 5.6rem;
 }
 
 .app-shell.dock-collapsed .story-stage-canvas {
-  min-height: calc(100vh - 4rem);
+  min-height: calc(100svh - 2rem);
 }
 
 .story-stage-canvas {
@@ -3580,7 +3640,7 @@
   display: grid;
   grid-template-columns: minmax(320px, 0.94fr) minmax(180px, 0.56fr) minmax(420px, 1.08fr);
   gap: 1rem;
-  min-height: calc(100vh - 8.2rem);
+  min-height: calc(100svh - 6.75rem);
   background:
     linear-gradient(
       90deg,
@@ -3817,7 +3877,7 @@
   --projector-dark-left: rgba(4, 8, 12, 0.98);
   --projector-dark-mid: rgba(7, 11, 15, 0.96);
   grid-template-columns: minmax(300px, 0.33fr) minmax(0, 1fr);
-  min-height: calc(100vh - 7.8rem);
+  min-height: calc(100svh - 6.35rem);
   background:
     linear-gradient(
       90deg,
@@ -3827,6 +3887,10 @@
       rgba(249, 249, 248, 0.98) 100%
     );
   transition: background 680ms ease;
+}
+
+.app-shell.dock-collapsed .story-stage-canvas.projector-canvas {
+  min-height: calc(100svh - 1.5rem);
 }
 
 .story-stage-canvas.projector-canvas.is-alert-theme {
@@ -3914,6 +3978,7 @@
   display: flex;
   flex-direction: column;
   gap: 1rem;
+  min-height: 100%;
   min-width: 0;
   padding: 0.75rem 1.3rem 0.2rem clamp(3.4rem, 5vw, 6.2rem);
   color: #090b0f;
@@ -5097,23 +5162,23 @@
   }
 }
 
-@keyframes ambientShift {
+@keyframes ambientFieldDrift {
   0% {
-    transform: translate3d(0, 0, 0) scale(1);
+    transform: translate3d(0, 0, 0) scale(1.02);
   }
 
   100% {
-    transform: translate3d(1.5%, -1.5%, 0) scale(1.04);
+    transform: translate3d(1.6%, -1.4%, 0) scale(1.08);
   }
 }
 
-@keyframes scanSweep {
+@keyframes ambientGridFloat {
   0% {
-    transform: translate3d(0, -120%, 0) skewY(-5deg);
+    transform: translate3d(0, 0, 0);
   }
 
   100% {
-    transform: translate3d(0, 140%, 0) skewY(-5deg);
+    transform: translate3d(0.8%, -0.8%, 0);
   }
 }
 
@@ -5681,7 +5746,8 @@
   }
 
   .story-stage-header {
-    padding: 10.8rem 0.8rem 0.6rem;
+    padding: 8.2rem 0.8rem 0.65rem;
+    min-height: 7.2rem;
   }
 
   .incident-projector-path,
@@ -5724,5 +5790,25 @@
 
   .timeline-list-expanded .timeline-item::before {
     left: -0.82rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-shell::before,
+  .app-shell::after,
+  .live-dot.state-live,
+  .incident-projector-scan,
+  .incident-projector-node.is-active .incident-projector-dot {
+    animation: none !important;
+  }
+
+  .surface-dock,
+  .story-stage-header,
+  .story-stage-canvas,
+  .story-stage-canvas.projector-canvas,
+  .projector-canvas .story-stage-queue .event-row,
+  .story-stage-abstract,
+  .story-stage-note-slim {
+    transition: none !important;
   }
 }

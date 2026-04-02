@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import { EvidenceDrawer } from './components/EvidenceDrawer'
 import { ErrorBoundary } from './components/ErrorBoundary'
@@ -42,6 +42,8 @@ function selectedDeviceLabel(
 function App() {
   const { snapshot, latestDelta, connectionState, transportIssue } =
     useRuntimeSnapshot()
+  const heroStageRef = useRef<HTMLElement | null>(null)
+  const heroStageSnapArmedRef = useRef(true)
   const suggestionPool =
     snapshot.suggestions.length > 0
       ? snapshot.suggestions
@@ -172,6 +174,10 @@ function App() {
     view === 'console' && !showSurfacePanel && !showEvidenceDrawer
 
   useEffect(() => {
+    heroStageSnapArmedRef.current = true
+  }, [view, showSurfacePanel, showEvidenceDrawer, activeSuggestionId])
+
+  useEffect(() => {
     if (!canCollapseDock) {
       setShowSurfaceDock(true)
       return
@@ -182,11 +188,33 @@ function App() {
     const handleScroll = () => {
       const currentY = window.scrollY
       const scrollingDown = currentY > previousY
+      const heroStageTop = heroStageRef.current
+        ? window.scrollY + heroStageRef.current.getBoundingClientRect().top - 10
+        : Number.POSITIVE_INFINITY
 
       if (currentY <= 20) {
         setShowSurfaceDock(true)
-      } else if (scrollingDown && currentY > 40) {
+        heroStageSnapArmedRef.current = true
+      } else if (currentY > 72) {
         setShowSurfaceDock(false)
+
+        const shouldAutoSnap =
+          scrollingDown &&
+          heroStageSnapArmedRef.current &&
+          Number.isFinite(heroStageTop) &&
+          currentY < heroStageTop - 20 &&
+          heroStageTop < window.innerHeight * 1.2
+
+        if (shouldAutoSnap) {
+          heroStageSnapArmedRef.current = false
+          const prefersReducedMotion = window.matchMedia(
+            '(prefers-reduced-motion: reduce)',
+          ).matches
+          window.scrollTo({
+            top: Math.max(0, heroStageTop),
+            behavior: prefersReducedMotion ? 'auto' : 'smooth',
+          })
+        }
       } else if (!scrollingDown && previousY - currentY > 10) {
         setShowSurfaceDock(true)
       }
@@ -373,6 +401,7 @@ function App() {
               locale={locale}
               onOpenEvidence={() => setShowEvidenceDrawer(true)}
               onOpenRuntimeSheet={() => setShowSurfacePanel(true)}
+              heroStageRef={heroStageRef}
             />
           ) : view === 'topology' ? (
             <PipelineTopologyView snapshot={snapshot} locale={locale} />

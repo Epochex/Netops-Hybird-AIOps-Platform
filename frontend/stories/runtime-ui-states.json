@@ -117,6 +117,17 @@
             "summary=service + device + judgment",
             "details=click-to-expand"
           ]
+        },
+        {
+          "id": "slice-immersive-scroll-handoff",
+          "label": "Immersive scroll handoff",
+          "state": "hero-snap",
+          "why": "The first downward scroll should fully clear the floating dock and hand the viewport to the incident stage instead of leaving a dead spacer band.",
+          "propsPreview": [
+            "trigger=first downward scroll",
+            "dock=hidden",
+            "focus=runtime-main-stage"
+          ]
         }
       ]
     },
@@ -267,6 +278,17 @@
           "propsPreview": [
             "criticalCss=present",
             "liveStream=stalled"
+          ]
+        },
+        {
+          "id": "theater-viewport-takeover",
+          "label": "Viewport takeover",
+          "state": "immersive-stage",
+          "why": "After the dock collapses, the incident stage should hold nearly the full viewport so the queue rail and projector become the primary read.",
+          "propsPreview": [
+            "dock=collapsed",
+            "stage=min-height viewport",
+            "queue=primary rail"
           ]
         }
       ]
