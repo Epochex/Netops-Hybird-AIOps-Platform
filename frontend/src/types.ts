@@ -64,6 +64,14 @@ export interface TimelineStep {
   durationMs?: number | null
 }
 
+export interface ProjectionBasisEntry {
+  label: string
+  section: string
+  field: string
+  value: string
+  reason: string
+}
+
 export interface SuggestionRecord {
   id: string
   alertId: string
@@ -95,6 +103,7 @@ export interface SuggestionRecord {
   confidence: number
   confidenceLabel: string
   confidenceReason: string
+  projectionBasis?: Record<string, ProjectionBasisEntry[]>
   timeline?: TimelineStep[]
   stageTelemetry?: StageTelemetry[]
 }

@@ -1,11 +1,41 @@
+import { useEffect } from 'react'
 import { exportCompareSampleDetail } from '../../utils/compareExport'
 import type { CompareProviderEvaluation, CompareSampleUnit } from '../../types'
 
 interface CompareDetailPanelProps {
+  locale: 'en' | 'zh'
+  isOpen: boolean
   sample: CompareSampleUnit | undefined
+  onClose: () => void
+}
+
+function metricLabel(locale: 'en' | 'zh', value: number | null) {
+  if (value === null) {
+    return locale === 'zh' ? '待接入' : 'pending'
+  }
+  return `${Math.round(value * 100)}%`
+}
+
+function runtimeLabel(locale: 'en' | 'zh', value: number | null, unit: 'ms' | 'usd') {
+  if (value === null) {
+    return locale === 'zh' ? '待接入' : 'pending'
+  }
+  return unit === 'ms' ? `${Math.round(value)} ms` : `$${value.toFixed(3)}`
+}
+
+function statusLabel(locale: 'en' | 'zh', status: string) {
+  if (locale !== 'zh') {
+    return status
+  }
+  if (status === 'ready') return '就绪'
+  if (status === 'placeholder') return '占位'
+  if (status === 'failed') return '失败'
+  if (status === 'unavailable') return '未接入'
+  return status
 }
 
 function EvaluationColumn(props: {
+  locale: 'en' | 'zh'
   title: string
   evaluation: CompareProviderEvaluation
   accent: 'baseline' | 'llm'
@@ -18,26 +48,34 @@ function EvaluationColumn(props: {
           <strong>{props.evaluation.providerName}</strong>
         </div>
         <span className={`compare-status-chip status-${props.evaluation.status}`}>
-          {props.evaluation.status}
+          {statusLabel(props.locale, props.evaluation.status)}
         </span>
       </header>
 
       <div className="compare-detail-metrics">
         <div>
-          <span>Completeness</span>
-          <strong>{metricLabel(props.evaluation.metrics.explanationCompleteness)}</strong>
+          <span>{props.locale === 'zh' ? '完整度' : 'Completeness'}</span>
+          <strong>{metricLabel(props.locale, props.evaluation.metrics.explanationCompleteness)}</strong>
         </div>
         <div>
-          <span>Actionability</span>
-          <strong>{metricLabel(props.evaluation.metrics.actionability)}</strong>
+          <span>{props.locale === 'zh' ? '可执行性' : 'Actionability'}</span>
+          <strong>{metricLabel(props.locale, props.evaluation.metrics.actionability)}</strong>
         </div>
         <div>
-          <span>Binding</span>
-          <strong>{metricLabel(props.evaluation.metrics.evidenceBinding)}</strong>
+          <span>{props.locale === 'zh' ? '绑定率' : 'Binding'}</span>
+          <strong>{metricLabel(props.locale, props.evaluation.metrics.evidenceBinding)}</strong>
         </div>
         <div>
-          <span>Latency</span>
-          <strong>{runtimeLabel(props.evaluation.runtime.latencyMs, 'ms')}</strong>
+          <span>{props.locale === 'zh' ? '稳定性' : 'Stability'}</span>
+          <strong>{metricLabel(props.locale, props.evaluation.metrics.stability)}</strong>
+        </div>
+        <div>
+          <span>{props.locale === 'zh' ? '时延' : 'Latency'}</span>
+          <strong>{runtimeLabel(props.locale, props.evaluation.runtime.latencyMs, 'ms')}</strong>
+        </div>
+        <div>
+          <span>{props.locale === 'zh' ? '成本' : 'Cost'}</span>
+          <strong>{runtimeLabel(props.locale, props.evaluation.runtime.estimatedCostUsd, 'usd')}</strong>
         </div>
       </div>
 
@@ -53,187 +91,225 @@ function EvaluationColumn(props: {
           </section>
         ))}
       </div>
+    </article>
+  )
+}
 
-      <div className="compare-detail-output compare-detail-actions">
-        <section className="compare-output-block">
-          <span>Recommended Actions</span>
-          {props.evaluation.recommendedActions.length > 0 ? (
-            <ol>
-              {props.evaluation.recommendedActions.map((action) => (
-                <li key={action}>{action}</li>
-              ))}
-            </ol>
-          ) : (
-            <p className="compare-empty-copy">No action output.</p>
-          )}
-        </section>
+function EvidenceMappingCard(props: {
+  locale: 'en' | 'zh'
+  sample: CompareSampleUnit
+}) {
+  const references = [
+    ...props.sample.baseline.evidenceReferences.map((reference) => ({
+      ...reference,
+      provider: 'Baseline',
+    })),
+    ...props.sample.llm.evidenceReferences.map((reference) => ({
+      ...reference,
+      provider: 'LLM',
+    })),
+  ]
+
+  return (
+    <article className="compare-evidence-card">
+      <strong>{props.locale === 'zh' ? '证据映射' : 'Evidence Map'}</strong>
+      <div className="compare-reference-map compare-reference-map-drawer">
+        {references.map((reference) => (
+          <div
+            key={reference.id}
+            className={`compare-reference-row ${reference.provider === 'Baseline' ? 'baseline' : 'llm'}`}
+          >
+            <span className="compare-reference-provider">
+              {props.locale === 'zh' && reference.provider === 'Baseline'
+                ? '基线'
+                : reference.provider}
+            </span>
+            <span className="compare-reference-source">
+              {reference.sourceSection}.{reference.sourceField}
+            </span>
+            <span className="compare-reference-line" />
+            <span className="compare-reference-claim">{reference.claim}</span>
+          </div>
+        ))}
       </div>
     </article>
   )
 }
 
-function metricLabel(value: number | null) {
-  if (value === null) {
-    return 'pending'
-  }
-  return `${Math.round(value * 100)}%`
-}
+export function CompareDetailPanel({
+  locale,
+  isOpen,
+  sample,
+  onClose,
+}: CompareDetailPanelProps) {
+  useEffect(() => {
+    if (!isOpen) {
+      return
+    }
 
-function runtimeLabel(value: number | null, unit: 'ms' | 'usd') {
-  if (value === null) {
-    return 'pending'
-  }
-  return unit === 'ms' ? `${Math.round(value)} ms` : `$${value.toFixed(3)}`
-}
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        onClose()
+      }
+    }
 
-export function CompareDetailPanel({ sample }: CompareDetailPanelProps) {
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [isOpen, onClose])
+
   if (!sample) {
-    return (
-      <aside className="section compare-shell-section compare-detail-panel is-empty">
-        <div className="compare-detail-empty">
-          <h3>Detail Panel</h3>
-          <p>Select one comparison row to inspect provider outputs, evidence references, and unsupported claims.</p>
-        </div>
-      </aside>
-    )
+    return null
   }
 
   return (
-    <aside className="section compare-shell-section compare-detail-panel">
-      <div className="compare-section-head compare-detail-head">
-        <div>
-          <h3 className="compare-section-title">A/B Detail</h3>
-          <p className="compare-section-copy">
-            {sample.bundleId} · {sample.ruleId} · {sample.service}
-          </p>
+    <div className={`compare-detail-overlay ${isOpen ? 'is-open' : ''}`} aria-hidden={!isOpen}>
+      <button
+        className="compare-detail-backdrop"
+        type="button"
+        onClick={onClose}
+        aria-label={locale === 'zh' ? '关闭对比详情抽屉' : 'Close detail drawer'}
+      />
+      <aside
+        className="compare-detail-drawer"
+        role="dialog"
+        aria-modal="true"
+        aria-label={locale === 'zh' ? '对比详情抽屉' : 'Comparison detail drawer'}
+      >
+        <div className="compare-detail-shell">
+          <header className="compare-detail-drawer-head">
+            <div>
+              <p className="compare-eyebrow">{locale === 'zh' ? 'A/B 抽屉' : 'A/B Drawer'}</p>
+              <h3 className="compare-section-title">
+                {sample.bundleId} · {sample.ruleId}
+              </h3>
+              <p className="compare-section-copy compare-section-copy-tight">
+                {sample.service} · {sample.path} · {sample.replay.runId}
+              </p>
+            </div>
+            <div className="compare-detail-head-actions">
+              <button
+                className="compare-action"
+                type="button"
+                onClick={() => exportCompareSampleDetail(sample)}
+              >
+                {locale === 'zh' ? '导出详情' : 'Export Detail'}
+              </button>
+              <button className="compare-action compare-action-accent" type="button" onClick={onClose}>
+                {locale === 'zh' ? '关闭' : 'Close'}
+              </button>
+            </div>
+          </header>
+
+          <div className="compare-detail-grid">
+            <EvaluationColumn locale={locale} title={locale === 'zh' ? '规则基线' : 'Baseline'} evaluation={sample.baseline} accent="baseline" />
+            <EvaluationColumn locale={locale} title="LLM" evaluation={sample.llm} accent="llm" />
+          </div>
+
+          <div className="compare-evidence-section compare-evidence-section-drawer">
+            <article className="compare-evidence-card">
+              <strong>{locale === 'zh' ? '证据包' : 'Evidence Bundle'}</strong>
+              <div className="compare-evidence-grid">
+                <section>
+                  <span>{locale === 'zh' ? '拓扑' : 'Topology'}</span>
+                  <ul>
+                    {Object.entries(sample.evidenceBundle.topology).map(([key, value]) => (
+                      <li key={key}>
+                        <code>{key}</code> {Array.isArray(value) ? value.join(', ') : String(value)}
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+                <section>
+                  <span>{locale === 'zh' ? '设备' : 'Device'}</span>
+                  <ul>
+                    {Object.entries(sample.evidenceBundle.device).map(([key, value]) => (
+                      <li key={key}>
+                        <code>{key}</code> {Array.isArray(value) ? value.join(', ') : String(value)}
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+                <section>
+                  <span>{locale === 'zh' ? '变更' : 'Change'}</span>
+                  <ul>
+                    {Object.entries(sample.evidenceBundle.change).map(([key, value]) => (
+                      <li key={key}>
+                        <code>{key}</code> {Array.isArray(value) ? value.join(', ') : String(value)}
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+                <section>
+                  <span>{locale === 'zh' ? '历史' : 'Historical'}</span>
+                  <ul>
+                    {Object.entries(sample.evidenceBundle.historical).map(([key, value]) => (
+                      <li key={key}>
+                        <code>{key}</code> {Array.isArray(value) ? value.join(', ') : String(value)}
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              </div>
+            </article>
+
+            <EvidenceMappingCard locale={locale} sample={sample} />
+
+            <article className="compare-evidence-card">
+              <strong>{locale === 'zh' ? '无证据支撑内容' : 'Unsupported Claims'}</strong>
+              {sample.llm.unsupportedClaims.length > 0 ? (
+                <ul className="compare-unsupported-list">
+                  {sample.llm.unsupportedClaims.map((claim) => (
+                    <li key={claim.id}>
+                      <span className={`compare-status-chip severity-${claim.severity}`}>
+                        {locale === 'zh'
+                          ? claim.severity === 'high'
+                            ? '高'
+                            : claim.severity === 'medium'
+                              ? '中'
+                              : '低'
+                          : claim.severity}
+                      </span>
+                      <div>
+                        <strong>{claim.claim}</strong>
+                        <p>{claim.reason}</p>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="compare-empty-copy">
+                  {locale === 'zh'
+                    ? '当前样本没有记录无证据支撑内容。'
+                    : 'No unsupported claim markers for the active sample.'}
+                </p>
+              )}
+            </article>
+
+            <article className="compare-evidence-card">
+              <strong>{locale === 'zh' ? '审计备注' : 'Audit Notes'}</strong>
+              <ul className="compare-note-list compare-note-list-tight">
+                {sample.reviewNotes.map((note) => (
+                  <li key={note}>{note}</li>
+                ))}
+                {sample.baseline.notes.map((note) => (
+                  <li key={`baseline-${note}`}>{locale === 'zh' ? '基线：' : 'Baseline: '}{note}</li>
+                ))}
+                {sample.llm.notes.map((note) => (
+                  <li key={`llm-${note}`}>LLM: {note}</li>
+                ))}
+              </ul>
+
+              <div className="compare-runtime-ledger">
+                <span>{sample.replay.replayLabel}</span>
+                <span>{sample.replay.runId}</span>
+                <span>{locale === 'zh' ? '输入' : 'input'} {sample.llm.runtime.inputTokens ?? 0}</span>
+                <span>{locale === 'zh' ? '输出' : 'output'} {sample.llm.runtime.outputTokens ?? 0}</span>
+                <span>{locale === 'zh' ? '成本' : 'cost'} {runtimeLabel(locale, sample.llm.runtime.estimatedCostUsd, 'usd')}</span>
+              </div>
+            </article>
+          </div>
         </div>
-        <button
-          className="compare-action"
-          type="button"
-          onClick={() => exportCompareSampleDetail(sample)}
-        >
-          Export Detail
-        </button>
-      </div>
-
-      <div className="compare-detail-grid">
-        <EvaluationColumn title="Baseline" evaluation={sample.baseline} accent="baseline" />
-        <EvaluationColumn title="LLM" evaluation={sample.llm} accent="llm" />
-      </div>
-
-      <div className="compare-evidence-section">
-        <article className="compare-evidence-card">
-          <strong>Evidence Bundle</strong>
-          <div className="compare-evidence-grid">
-            <section>
-              <span>Topology</span>
-              <ul>
-                {Object.entries(sample.evidenceBundle.topology).map(([key, value]) => (
-                  <li key={key}>
-                    <code>{key}</code> {Array.isArray(value) ? value.join(', ') : String(value)}
-                  </li>
-                ))}
-              </ul>
-            </section>
-            <section>
-              <span>Device</span>
-              <ul>
-                {Object.entries(sample.evidenceBundle.device).map(([key, value]) => (
-                  <li key={key}>
-                    <code>{key}</code> {Array.isArray(value) ? value.join(', ') : String(value)}
-                  </li>
-                ))}
-              </ul>
-            </section>
-            <section>
-              <span>Change</span>
-              <ul>
-                {Object.entries(sample.evidenceBundle.change).map(([key, value]) => (
-                  <li key={key}>
-                    <code>{key}</code> {Array.isArray(value) ? value.join(', ') : String(value)}
-                  </li>
-                ))}
-              </ul>
-            </section>
-            <section>
-              <span>Historical</span>
-              <ul>
-                {Object.entries(sample.evidenceBundle.historical).map(([key, value]) => (
-                  <li key={key}>
-                    <code>{key}</code> {Array.isArray(value) ? value.join(', ') : String(value)}
-                  </li>
-                ))}
-              </ul>
-            </section>
-          </div>
-        </article>
-
-        <article className="compare-evidence-card">
-          <strong>Evidence-Reference Mapping</strong>
-          <div className="compare-reference-map">
-            {sample.baseline.evidenceReferences.map((reference) => (
-              <div key={reference.id} className="compare-reference-row baseline">
-                <span className="compare-reference-claim">{reference.claim}</span>
-                <span className="compare-reference-line" />
-                <span className="compare-reference-source">
-                  {reference.sourceSection}.{reference.sourceField}
-                </span>
-              </div>
-            ))}
-            {sample.llm.evidenceReferences.map((reference) => (
-              <div key={reference.id} className="compare-reference-row llm">
-                <span className="compare-reference-claim">{reference.claim}</span>
-                <span className="compare-reference-line" />
-                <span className="compare-reference-source">
-                  {reference.sourceSection}.{reference.sourceField}
-                </span>
-              </div>
-            ))}
-          </div>
-        </article>
-
-        <article className="compare-evidence-card">
-          <strong>Unsupported Claims</strong>
-          {sample.llm.unsupportedClaims.length > 0 ? (
-            <ul className="compare-unsupported-list">
-              {sample.llm.unsupportedClaims.map((claim) => (
-                <li key={claim.id}>
-                  <span className={`compare-status-chip severity-${claim.severity}`}>
-                    {claim.severity}
-                  </span>
-                  <div>
-                    <strong>{claim.claim}</strong>
-                    <p>{claim.reason}</p>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="compare-empty-copy">No unsupported claims recorded for the active LLM slice.</p>
-          )}
-        </article>
-
-        <article className="compare-evidence-card">
-          <strong>Metric Reasoning Notes</strong>
-          <ul className="compare-note-list">
-            {sample.reviewNotes.map((note) => (
-              <li key={note}>{note}</li>
-            ))}
-            {sample.baseline.notes.map((note) => (
-              <li key={`baseline-${note}`}>Baseline: {note}</li>
-            ))}
-            {sample.llm.notes.map((note) => (
-              <li key={`llm-${note}`}>LLM: {note}</li>
-            ))}
-          </ul>
-          <div className="compare-runtime-ledger">
-            <span>{sample.replay.replayLabel}</span>
-            <span>run {sample.replay.runId}</span>
-            <span>baseline {runtimeLabel(sample.baseline.runtime.estimatedCostUsd, 'usd')}</span>
-            <span>llm {runtimeLabel(sample.llm.runtime.estimatedCostUsd, 'usd')}</span>
-          </div>
-        </article>
-      </div>
-    </aside>
+      </aside>
+    </div>
   )
 }

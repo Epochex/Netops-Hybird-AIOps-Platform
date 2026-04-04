@@ -10,6 +10,7 @@ import {
 import type { RuntimeConnectionState } from '../hooks/useRuntimeSnapshot'
 import type {
   FeedEvent,
+  ProjectionBasisEntry,
   RuntimeSnapshot,
   RuntimeStreamDelta,
   StageLink,
@@ -39,8 +40,6 @@ interface LiveFlowConsoleProps {
   onSelectSuggestion: (suggestionId: string) => void
   transportIssue?: string | null
   locale: 'en' | 'zh'
-  onOpenEvidence: () => void
-  onOpenRuntimeSheet: () => void
   heroStageRef?: RefObject<HTMLElement | null>
 }
 
@@ -118,6 +117,17 @@ interface ProjectorFact {
 }
 
 type ProjectorEvidenceState = 'none' | 'partial' | 'rich'
+type ProjectorRuntimeSource =
+  | 'telemetry-window'
+  | 'phase-sum'
+  | 'timeline-window'
+  | 'timeline-sum'
+  | 'demo-clock'
+
+interface ProjectorRuntimeMeasurement {
+  durationMs: number | null
+  source: ProjectorRuntimeSource
+}
 
 interface ProjectorStation {
   id: string
@@ -126,6 +136,7 @@ interface ProjectorStation {
   caption: string
   detail: string
   facts: ProjectorFact[]
+  sources: ProjectionBasisEntry[]
   guidedStageId: string
   evidenceState: ProjectorEvidenceState
 }
@@ -1122,6 +1133,7 @@ function buildProjectorStations(
   const topology = suggestion.evidenceBundle.topology
   const device = suggestion.evidenceBundle.device
   const change = suggestion.evidenceBundle.change
+  const projectionBasis = suggestion.projectionBasis ?? {}
   const ruleLabel = prettyRuleName(suggestion.ruleId)
   const deviceLabel = friendlyDeviceName(suggestion)
   const hypothesis =
@@ -1232,6 +1244,7 @@ function buildProjectorStations(
           ? `${ruleLabel} 刚把 ${deviceLabel} 的 ${suggestion.context.service} 标成当前主事件，后面所有节点都会围绕这条路径继续解释。`
           : `${ruleLabel} just marked ${suggestion.context.service} on ${deviceLabel} as the current incident, and the rest of the chain now explains that path.`,
       facts: triggerFacts,
+      sources: projectionBasis['projector-trigger'] ?? [],
       guidedStageId: 'guided-source',
       evidenceState: projectorEvidenceState(triggerFacts, locale),
     },
@@ -1249,6 +1262,7 @@ function buildProjectorStations(
           ? 'The same-key evidence crossed the cluster gate, so the system now treats it as a repeated pattern instead of a one-off spike.'
           : 'The evidence is still concentrated on one path, so the system is watching whether it grows into a repeated pattern.',
       facts: aggregateFacts,
+      sources: projectionBasis['projector-aggregate'] ?? [],
       guidedStageId:
         suggestion.scope === 'cluster' ? 'guided-cluster' : 'guided-alert',
       evidenceState: projectorEvidenceState(aggregateFacts, locale),
@@ -1266,6 +1280,7 @@ function buildProjectorStations(
           ? `现在优先看的就是 ${pathToken} 这条路线，它告诉我们问题是在什么路径上被观察到的。`
           : `The current review stays centered on ${pathToken}, which tells us where the issue is being observed.`,
       facts: pathFacts,
+      sources: projectionBasis['projector-path'] ?? [],
       guidedStageId: 'guided-source',
       evidenceState: projectorEvidenceState(pathFacts, locale),
     },
@@ -1282,6 +1297,7 @@ function buildProjectorStations(
           ? `系统现在用 ${deviceLabel} 作为主设备身份，同时结合变更线索判断这更像偶发噪声，还是设备姿态真的发生了变化。`
           : `The system now uses ${deviceLabel} as the main identity anchor and combines it with change clues to decide whether this is noise or a real posture shift.`,
       facts: deviceFacts,
+      sources: projectionBasis['projector-device'] ?? [],
       guidedStageId: 'guided-alert',
       evidenceState: projectorEvidenceState(deviceFacts, locale),
     },
@@ -1295,6 +1311,7 @@ function buildProjectorStations(
           : 'best current reading',
       detail: hypothesis,
       facts: inferenceFacts,
+      sources: projectionBasis['projector-inference'] ?? [],
       guidedStageId: 'guided-suggestion',
       evidenceState: projectorEvidenceState(inferenceFacts, locale),
     },
@@ -1308,16 +1325,18 @@ function buildProjectorStations(
           : 'recommended next move',
       detail: primaryRecommendation(suggestion),
       facts: actionFacts,
+      sources: projectionBasis['projector-action'] ?? [],
       guidedStageId: 'guided-operator',
       evidenceState: projectorEvidenceState(actionFacts, locale),
     },
   ] satisfies ProjectorStation[]
 }
 
-function projectorMeasuredRuntimeMs(
+function projectorRuntimeMeasurement(
   lifecycle: LifecyclePhase[],
   suggestion: SuggestionRecord,
-) {
+  timeline: RuntimeSnapshot['timeline'],
+): ProjectorRuntimeMeasurement {
   const telemetry = suggestion.stageTelemetry ?? []
   const startedAtValues = telemetry
     .map((item) => parseTimestamp(item.startedAt ?? item.endedAt))
@@ -1332,7 +1351,10 @@ function projectorMeasuredRuntimeMs(
     const measuredMs = Math.max(0, endedAtMs - startedAtMs)
 
     if (measuredMs > 0 && measuredMs <= 10 * 60_000) {
-      return measuredMs
+      return {
+        durationMs: measuredMs,
+        source: 'telemetry-window',
+      }
     }
   }
 
@@ -1345,10 +1367,78 @@ function projectorMeasuredRuntimeMs(
   }, 0)
 
   if (summedDurationMs > 0 && summedDurationMs <= 10 * 60_000) {
-    return summedDurationMs
+    return {
+      durationMs: summedDurationMs,
+      source: 'phase-sum',
+    }
   }
 
-  return null
+  const timelineStamps = timeline
+    .map((step) => parseTimestamp(step.stamp))
+    .filter((stamp): stamp is Date => Boolean(stamp))
+
+  if (timelineStamps.length > 1) {
+    const startedAtMs = Math.min(...timelineStamps.map((stamp) => stamp.getTime()))
+    const endedAtMs = Math.max(...timelineStamps.map((stamp) => stamp.getTime()))
+    const measuredMs = Math.max(0, endedAtMs - startedAtMs)
+
+    if (measuredMs > 0 && measuredMs <= 10 * 60_000) {
+      return {
+        durationMs: measuredMs,
+        source: 'timeline-window',
+      }
+    }
+  }
+
+  const summedTimelineDurationMs = timeline.reduce((total, step) => {
+    const durationMs = step.durationMs
+    if (!durationMs || durationMs <= 0 || durationMs > 5 * 60_000) {
+      return total
+    }
+    return total + durationMs
+  }, 0)
+
+  if (summedTimelineDurationMs > 0 && summedTimelineDurationMs <= 10 * 60_000) {
+    return {
+      durationMs: summedTimelineDurationMs,
+      source: 'timeline-sum',
+    }
+  }
+
+  return {
+    durationMs: null,
+    source: 'demo-clock',
+  }
+}
+
+function projectorRuntimeSourceLabel(
+  source: ProjectorRuntimeSource,
+  locale: 'en' | 'zh',
+) {
+  const mapping: Record<ProjectorRuntimeSource, { en: string; zh: string }> = {
+    'telemetry-window': {
+      en: 'stage telemetry window',
+      zh: '阶段时序窗口',
+    },
+    'phase-sum': {
+      en: 'phase duration sum',
+      zh: '阶段耗时求和',
+    },
+    'timeline-window': {
+      en: 'timeline timestamp window',
+      zh: '时间线时间窗',
+    },
+    'timeline-sum': {
+      en: 'timeline duration sum',
+      zh: '时间线耗时求和',
+    },
+    'demo-clock': {
+      en: 'demo playback clock',
+      zh: '演示回放时钟',
+    },
+  }
+
+  return mapping[source][locale]
 }
 
 function projectorPlaybackStepMs(
@@ -1537,8 +1627,6 @@ export function LiveFlowConsole({
   onSelectSuggestion,
   transportIssue,
   locale,
-  onOpenEvidence,
-  onOpenRuntimeSheet,
   heroStageRef,
 }: LiveFlowConsoleProps) {
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null)
@@ -1680,10 +1768,16 @@ export function LiveFlowConsole({
       ),
     [projectorPlaybackStepDurations],
   )
-  const projectorActualDurationMs = useMemo(
-    () => projectorMeasuredRuntimeMs(lifecycle, linkedSuggestion),
-    [lifecycle, linkedSuggestion],
+  const projectorRuntime = useMemo(
+    () =>
+      projectorRuntimeMeasurement(
+        lifecycle,
+        linkedSuggestion,
+        incidentTimeline,
+      ),
+    [incidentTimeline, lifecycle, linkedSuggestion],
   )
+  const projectorActualDurationMs = projectorRuntime.durationMs
   const projectorDisplayDurationMs =
     projectorActualDurationMs ?? projectorPlaybackDurationMs
   const projectorDisplayStepDurations = useMemo(
@@ -1714,6 +1808,20 @@ export function LiveFlowConsole({
   const projectorDisplayedElapsedMs = projectorPlaybackRunning
     ? projectorDisplayDurationMs * projectorPlaybackRatio
     : projectorDisplayDurationMs
+  const projectorRuntimeLabel =
+    projectorActualDurationMs !== null
+      ? locale === 'zh'
+        ? '实测链路时长'
+        : 'measured chain runtime'
+      : locale === 'zh'
+        ? '演示回放时钟'
+        : 'demo playback clock'
+  const projectorRuntimeNote =
+    projectorActualDurationMs !== null
+      ? projectorRuntimeSourceLabel(projectorRuntime.source, locale)
+      : locale === 'zh'
+        ? '未拿到有效阶段时序，当前仅显示前端回放编排'
+        : 'No valid stage timing available; showing the frontend replay clock.'
 
   useEffect(() => {
     if (selectedEventId || queueEvents.length === 0) {
@@ -1931,12 +2039,6 @@ export function LiveFlowConsole({
             </span>
             <div className="story-stage-actions">
               <span className={`signal-chip tone-${pulseTone}`}>{pulseTone}</span>
-              <button type="button" className="story-stage-action" onClick={onOpenRuntimeSheet}>
-                {locale === 'zh' ? '运行概览' : 'Runtime Sheet'}
-              </button>
-              <button type="button" className="story-stage-action is-bright" onClick={onOpenEvidence}>
-                {locale === 'zh' ? '当前建议' : 'Current Brief'}
-              </button>
             </div>
           </div>
         </div>
@@ -2057,15 +2159,18 @@ export function LiveFlowConsole({
                 className={`incident-projector-runtime ${projectorPlaybackRunning ? 'is-running' : 'is-complete'}`}
               >
                 <span className="incident-projector-runtime-label">
-                  {locale === 'zh' ? '回放总时长' : 'playback runtime'}
+                  {projectorRuntimeLabel}
                 </span>
                 <strong>
                   {projectorDisplayedElapsedMs !== null
-                    ? formatProjectorTimer(projectorDisplayedElapsedMs)
+                    ? `${formatProjectorTimer(projectorDisplayedElapsedMs)}${projectorActualDurationMs === null ? '*' : ''}`
                     : locale === 'zh'
                       ? '时序缺失'
                       : 'timing unavailable'}
                 </strong>
+                <span className="incident-projector-runtime-note">
+                  {projectorRuntimeNote}
+                </span>
               </div>
             </div>
 
@@ -2139,6 +2244,28 @@ export function LiveFlowConsole({
                               </div>
                             ))}
                           </dl>
+                          {station.sources.length > 0 ? (
+                            <div className="incident-projector-sources">
+                              <strong>
+                                {locale === 'zh' ? '依据源' : 'basis sources'}
+                              </strong>
+                              <div className="incident-projector-source-list">
+                                {station.sources.map((source) => (
+                                  <article
+                                    key={`${station.id}-${source.section}-${source.field}-${source.label}`}
+                                    className="incident-projector-source"
+                                  >
+                                    <span className="incident-projector-source-head">
+                                      <em>{source.label}</em>
+                                      <code>{source.section}.{source.field}</code>
+                                    </span>
+                                    <strong>{source.value}</strong>
+                                    <p>{source.reason}</p>
+                                  </article>
+                                ))}
+                              </div>
+                            </div>
+                          ) : null}
                         </span>
                       ) : null}
                     </button>
