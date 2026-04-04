@@ -1,4 +1,12 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  lazy,
+  Suspense,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from 'react'
 import './App.css'
 import { EvidenceDrawer } from './components/EvidenceDrawer'
 import { ErrorBoundary } from './components/ErrorBoundary'
@@ -42,6 +50,7 @@ function selectedDeviceLabel(
 function App() {
   const { snapshot, latestDelta, connectionState, transportIssue } =
     useRuntimeSnapshot()
+  const surfaceDockRef = useRef<HTMLElement | null>(null)
   const heroStageRef = useRef<HTMLElement | null>(null)
   const heroStageSnapArmedRef = useRef(true)
   const suggestionPool =
@@ -55,6 +64,7 @@ function App() {
   const [showSurfacePanel, setShowSurfacePanel] = useState(false)
   const [showEvidenceDrawer, setShowEvidenceDrawer] = useState(false)
   const [showSurfaceDock, setShowSurfaceDock] = useState(true)
+  const [surfaceDockClearance, setSurfaceDockClearance] = useState(108)
   const [preferredSuggestionId, setPreferredSuggestionId] =
     useState(defaultSuggestionId)
   const activeSuggestionId = suggestionPool.some(
@@ -172,10 +182,42 @@ function App() {
         : copy.titleCompare
   const canCollapseDock =
     view === 'console' && !showSurfacePanel && !showEvidenceDrawer
+  const appShellStyle = useMemo(
+    () =>
+      ({
+        ['--surface-dock-clearance' as '--surface-dock-clearance']: `${showSurfaceDock ? surfaceDockClearance : 0}px`,
+      }) as CSSProperties,
+    [showSurfaceDock, surfaceDockClearance],
+  )
 
   useEffect(() => {
     heroStageSnapArmedRef.current = true
   }, [view, showSurfacePanel, showEvidenceDrawer, activeSuggestionId])
+
+  useEffect(() => {
+    const dock = surfaceDockRef.current
+    if (!dock) {
+      return
+    }
+
+    const updateDockClearance = () => {
+      const nextValue = Math.max(0, Math.ceil(dock.getBoundingClientRect().bottom + 12))
+      setSurfaceDockClearance((currentValue) =>
+        Math.abs(currentValue - nextValue) > 1 ? nextValue : currentValue,
+      )
+    }
+
+    updateDockClearance()
+
+    const resizeObserver = new ResizeObserver(() => updateDockClearance())
+    resizeObserver.observe(dock)
+    window.addEventListener('resize', updateDockClearance)
+
+    return () => {
+      resizeObserver.disconnect()
+      window.removeEventListener('resize', updateDockClearance)
+    }
+  }, [activeSuggestionId, connectionState, locale, showEvidenceDrawer, showSurfacePanel, view])
 
   useEffect(() => {
     if (!canCollapseDock) {
@@ -253,8 +295,10 @@ function App() {
   return (
     <div
       className={`app-shell ${canCollapseDock && !showSurfaceDock ? 'dock-collapsed' : ''}`}
+      style={appShellStyle}
     >
       <header
+        ref={surfaceDockRef}
         className={`surface-dock ${canCollapseDock && !showSurfaceDock ? 'is-hidden' : ''}`}
       >
         <div className="surface-dock-brand">
