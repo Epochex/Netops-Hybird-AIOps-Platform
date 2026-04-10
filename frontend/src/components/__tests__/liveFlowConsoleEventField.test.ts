@@ -236,4 +236,32 @@ describe('buildIncidentConvergenceModel', () => {
       expect.arrayContaining(['topology', 'device', 'change', 'historical']),
     )
   })
+
+  it('falls back cleanly when a historical suggestion has no structured runbook draft', () => {
+    const queue = makeQueue()
+    const suggestion = {
+      ...makeSuggestion(),
+      runbookDraft: undefined,
+    } as unknown as SuggestionRecord
+
+    const model = buildIncidentConvergenceModel({
+      locale: 'en',
+      queueEvents: queue,
+      activeEvent: queue[1],
+      linkedSuggestion: suggestion as SuggestionRecord,
+      clusterGateValue: '1/3 in 600s',
+      selectedInference:
+        'The repeated deny pattern is concentrated on one local broadcast tuple.',
+      selectedRecommendation:
+        'Review the last 15 minutes in ClickHouse for the same tuple.',
+      selectedWindowSummary: '18:00:00 - 18:03:18',
+      selectedScopeMeaning:
+        'The evidence is still concentrated on one service/device path.',
+      selectedRefreshSummary: 'merged 2 suggestion refreshes',
+    })
+
+    expect(model.runbook.title).toBe('Runbook draft')
+    expect(model.runbook.operatorActions[0]).toContain('ClickHouse')
+    expect(model.runbook.boundaries[0]).toContain('guidance only')
+  })
 })

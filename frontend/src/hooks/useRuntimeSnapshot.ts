@@ -1,9 +1,13 @@
 import { startTransition, useEffect, useState } from 'react'
 import { runtimeSnapshot as fallbackSnapshot } from '../data/runtimeModel'
 import type {
+  HypothesisSet,
+  ReviewVerdict,
   RuntimeSnapshot,
   RuntimeStreamDelta,
   RuntimeStreamEnvelope,
+  RunbookDraft,
+  SuggestionRecord,
 } from '../types'
 
 export type RuntimeConnectionState =
@@ -16,6 +20,201 @@ const SNAPSHOT_ENDPOINT = '/api/runtime/snapshot'
 const STREAM_ENDPOINT = '/api/runtime/stream'
 const SNAPSHOT_TIMEOUT_MS = 25_000
 const STREAM_HANDSHAKE_TIMEOUT_MS = 8_000
+
+function stringList(value: unknown) {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string')
+    : []
+}
+
+function normalizeRunbookDraft(suggestion: SuggestionRecord): RunbookDraft {
+  const draft = suggestion.runbookDraft as Partial<RunbookDraft> | undefined
+  const applicability = draft?.applicability
+  const approvalBoundary = draft?.approvalBoundary
+  const changeSummary = draft?.changeSummary
+
+  return {
+    planId:
+      typeof draft?.planId === 'string' && draft.planId.trim().length > 0
+        ? draft.planId
+        : 'fallback-runbook-draft',
+    planScope: suggestion.scope,
+    planStatus:
+      typeof draft?.planStatus === 'string' && draft.planStatus.trim().length > 0
+        ? draft.planStatus
+        : 'draft_ready',
+    title:
+      typeof draft?.title === 'string' && draft.title.trim().length > 0
+        ? draft.title
+        : 'Runbook draft',
+    applicability: {
+      ruleId:
+        typeof applicability?.ruleId === 'string' && applicability.ruleId.trim().length > 0
+          ? applicability.ruleId
+          : suggestion.ruleId,
+      service:
+        typeof applicability?.service === 'string' && applicability.service.trim().length > 0
+          ? applicability.service
+          : suggestion.context.service,
+      pathSignature:
+        typeof applicability?.pathSignature === 'string'
+          ? applicability.pathSignature
+          : '',
+    },
+    hypothesisRef:
+      typeof draft?.hypothesisRef === 'string' ? draft.hypothesisRef : '',
+    hypothesisStatement:
+      typeof draft?.hypothesisStatement === 'string'
+        ? draft.hypothesisStatement
+        : '',
+    prechecks: stringList(draft?.prechecks),
+    operatorActions:
+      stringList(draft?.operatorActions).length > 0
+        ? stringList(draft?.operatorActions)
+        : stringList(suggestion.recommendedActions),
+    boundaries:
+      stringList(draft?.boundaries).length > 0
+        ? stringList(draft?.boundaries)
+        : ['guidance only'],
+    rollbackGuidance: stringList(draft?.rollbackGuidance),
+    approvalBoundary: {
+      approvalRequired: approvalBoundary?.approvalRequired === true,
+      executionMode:
+        typeof approvalBoundary?.executionMode === 'string' &&
+        approvalBoundary.executionMode.trim().length > 0
+          ? approvalBoundary.executionMode
+          : 'human_gated',
+      writePathAllowed: approvalBoundary?.writePathAllowed === true,
+    },
+    evidenceRefs: stringList(draft?.evidenceRefs),
+    changeSummary: {
+      suspectedChange: changeSummary?.suspectedChange === true,
+      changeRefs: stringList(changeSummary?.changeRefs),
+    },
+  }
+}
+
+function normalizeHypothesisSet(suggestion: SuggestionRecord): HypothesisSet {
+  const set = suggestion.hypothesisSet as Partial<HypothesisSet> | undefined
+  const items = Array.isArray(set?.items) ? set.items : []
+
+  return {
+    setId:
+      typeof set?.setId === 'string' && set.setId.trim().length > 0
+        ? set.setId
+        : 'fallback-hypothesis-set',
+    primaryHypothesisId:
+      typeof set?.primaryHypothesisId === 'string'
+        ? set.primaryHypothesisId
+        : items[0]?.hypothesisId ?? '',
+    suggestionScope: suggestion.scope,
+    items,
+    summary: {
+      totalHypotheses:
+        typeof set?.summary?.totalHypotheses === 'number'
+          ? set.summary.totalHypotheses
+          : items.length,
+      directRefCount:
+        typeof set?.summary?.directRefCount === 'number'
+          ? set.summary.directRefCount
+          : 0,
+      supportingRefCount:
+        typeof set?.summary?.supportingRefCount === 'number'
+          ? set.summary.supportingRefCount
+          : 0,
+      contradictoryRefCount:
+        typeof set?.summary?.contradictoryRefCount === 'number'
+          ? set.summary.contradictoryRefCount
+          : 0,
+      missingRefCount:
+        typeof set?.summary?.missingRefCount === 'number'
+          ? set.summary.missingRefCount
+          : 0,
+    },
+  }
+}
+
+function normalizeReviewVerdict(suggestion: SuggestionRecord): ReviewVerdict {
+  const verdict = suggestion.reviewVerdict as Partial<ReviewVerdict> | undefined
+
+  return {
+    verdictId:
+      typeof verdict?.verdictId === 'string' && verdict.verdictId.trim().length > 0
+        ? verdict.verdictId
+        : 'fallback-review-verdict',
+    suggestionScope: suggestion.scope,
+    verdictStatus:
+      typeof verdict?.verdictStatus === 'string' && verdict.verdictStatus.trim().length > 0
+        ? verdict.verdictStatus
+        : 'operator_review',
+    recommendedDisposition:
+      typeof verdict?.recommendedDisposition === 'string' &&
+      verdict.recommendedDisposition.trim().length > 0
+        ? verdict.recommendedDisposition
+        : 'project_with_operator_boundary',
+    approvalRequired: verdict?.approvalRequired === true,
+    blockingIssues: stringList(verdict?.blockingIssues),
+    checks: {
+      evidenceSufficiency: verdict?.checks?.evidenceSufficiency ?? {
+        status: 'unknown',
+        detail: 'legacy suggestion fallback',
+      },
+      temporalFreshness: verdict?.checks?.temporalFreshness ?? {
+        status: 'unknown',
+        detail: 'legacy suggestion fallback',
+      },
+      topologyConsistency: verdict?.checks?.topologyConsistency ?? {
+        status: 'unknown',
+        detail: 'legacy suggestion fallback',
+      },
+      overreachRisk: verdict?.checks?.overreachRisk ?? {
+        status: 'unknown',
+        detail: 'legacy suggestion fallback',
+      },
+      remediationExecutability: verdict?.checks?.remediationExecutability ?? {
+        status: 'unknown',
+        detail: 'legacy suggestion fallback',
+      },
+      rollbackReadiness: verdict?.checks?.rollbackReadiness ?? {
+        status: 'unknown',
+        detail: 'legacy suggestion fallback',
+      },
+    },
+    reviewSummary:
+      typeof verdict?.reviewSummary === 'string' && verdict.reviewSummary.trim().length > 0
+        ? verdict.reviewSummary
+        : suggestion.confidenceReason,
+  }
+}
+
+function normalizeSuggestionRecord(suggestion: SuggestionRecord): SuggestionRecord {
+  return {
+    ...suggestion,
+    recommendedActions: stringList(suggestion.recommendedActions),
+    hypotheses: stringList(suggestion.hypotheses),
+    evidenceBundle: {
+      topology: suggestion.evidenceBundle?.topology ?? {},
+      device: suggestion.evidenceBundle?.device ?? {},
+      change: suggestion.evidenceBundle?.change ?? {},
+      historical: suggestion.evidenceBundle?.historical ?? {},
+    },
+    hypothesisSet: normalizeHypothesisSet(suggestion),
+    runbookDraft: normalizeRunbookDraft(suggestion),
+    reviewVerdict: normalizeReviewVerdict(suggestion),
+    projectionBasis: suggestion.projectionBasis ?? {},
+    timeline: suggestion.timeline ?? [],
+    stageTelemetry: suggestion.stageTelemetry ?? [],
+  }
+}
+
+function normalizeSnapshot(snapshot: RuntimeSnapshot): RuntimeSnapshot {
+  return {
+    ...snapshot,
+    suggestions: snapshot.suggestions.map((suggestion) =>
+      normalizeSuggestionRecord(suggestion),
+    ),
+  }
+}
 
 function activeSuggestion(snapshot: RuntimeSnapshot) {
   return (
@@ -45,7 +244,9 @@ function snapshotIntegrityIssue(snapshot: RuntimeSnapshot) {
 }
 
 export function useRuntimeSnapshot() {
-  const [snapshot, setSnapshot] = useState<RuntimeSnapshot>(fallbackSnapshot)
+  const [snapshot, setSnapshot] = useState<RuntimeSnapshot>(
+    normalizeSnapshot(fallbackSnapshot),
+  )
   const [latestDelta, setLatestDelta] = useState<RuntimeStreamDelta | null>(null)
   const [connectionState, setConnectionState] =
     useState<RuntimeConnectionState>('connecting')
@@ -69,7 +270,9 @@ export function useRuntimeSnapshot() {
         if (!response.ok) {
           throw new Error(`snapshot request failed: ${response.status}`)
         }
-        const nextSnapshot = (await response.json()) as RuntimeSnapshot
+        const nextSnapshot = normalizeSnapshot(
+          (await response.json()) as RuntimeSnapshot,
+        )
         const issue = snapshotIntegrityIssue(nextSnapshot)
         if (issue) {
           setTransportIssue(issue)
@@ -154,13 +357,14 @@ export function useRuntimeSnapshot() {
           if (envelope.type === 'heartbeat') {
             return
           }
-          const issue = snapshotIntegrityIssue(envelope.snapshot)
+          const nextSnapshot = normalizeSnapshot(envelope.snapshot)
+          const issue = snapshotIntegrityIssue(nextSnapshot)
           if (issue) {
             setTransportIssue(issue)
             setConnectionState('degraded')
             return
           }
-          startTransition(() => setSnapshot(envelope.snapshot))
+          startTransition(() => setSnapshot(nextSnapshot))
           if (envelope.type === 'delta') {
             setLatestDelta(envelope.delta)
           } else {

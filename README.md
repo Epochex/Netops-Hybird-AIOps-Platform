@@ -1,133 +1,155 @@
 ## NetOps Causality Remediation
-[![English](https://img.shields.io/badge/Language-English-1f6feb)](./README.md) [![简体中文](https://img.shields.io/badge/%E8%AF%AD%E8%A8%80-%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-2ea043)](./README_CN.md)
+[![English](https://img.shields.io/badge/Language-English-1f6feb)](./README.md) [![Simplified Chinese](https://img.shields.io/badge/Language-Simplified%20Chinese-2ea043)](./README_CN.md)
 
-NetOps Causality Remediation is a deterministic NetOps pipeline with a bounded LLM downstream path. The edge plane ingests real FortiGate syslog, normalizes it into fact JSONL, and forwards it to Kafka. The core plane correlates facts into confirmed alerts, persists the same alert stream into JSONL and ClickHouse, and emits structured AIOps suggestions. The frontend plane reads runtime files through a FastAPI gateway and projects them into a live operator console.
+This repository implements a NetOps primary pipeline that is anchored in deterministic alert adjudication and strengthened by downstream reasoning. Rule-backed alert confirmation remains the first decision point at all times; reasoning is introduced only after an alert has already been established. The project has moved beyond conceptual design and is now at a stage where the local structured pipeline is largely closed, with production-grade remote model execution as the main remaining gap.
 
-The first decision point remains `core/correlator`. The current LLM path starts after `netops.alerts.v1`. The repository keeps that split explicit in code, tests, and runtime projection.
+## System Architecture
+
+The current system is best understood as six structural planes:
+
+- Edge ingestion plane: receives real device logs and normalizes raw input into a stable stream of facts.
+- Deterministic decision plane: collapses that fact stream into established alerts, preserving a non-model first judgment.
+- Dual persistence plane: maintains both audit-grade storage and hot query history for compliance and retrieval use cases.
+- Aggregation trigger plane: turns repeated patterns under the same key into cluster-level triggers.
+- Downstream alert reasoning plane: assembles evidence, structured hypotheses, structured review, structured runbook drafts, and stage request contracts.
+- Runtime projection plane: renders runtime artifacts into frontend snapshots, timelines, compare views, and operator-readable surfaces.
+
+A future controlled execution plane is intentionally reserved in the design, but it currently exists only as an approval boundary, rollback boundary, and interface placeholder rather than a delivered capability.
+
+## Main Flow
+
+The primary workflow can be summarized as the following chain:
 
 ```mermaid
 flowchart LR
-  A[FortiGate syslog] --> B[edge/fortigate-ingest]
-  B --> C[parsed fact JSONL]
-  C --> D[edge/edge_forwarder]
-  D --> E[Kafka: netops.facts.raw.v1]
-  E --> F[core/correlator]
-  F --> G[Kafka: netops.alerts.v1]
-  G --> H[core/alerts_sink]
-  G --> I[core/alerts_store]
-  G --> J[core/aiops_agent]
-  I --> K[ClickHouse]
-  J --> L[Kafka: netops.aiops.suggestions.v1]
-  J --> M[suggestion JSONL]
-  H --> N[frontend/gateway]
-  K --> N
-  M --> N
-  N --> O[React runtime console]
+  A[Device logs] --> B[Edge ingestion plane]
+  B --> C[Structured fact stream]
+  C --> D[Deterministic decision plane]
+  D --> E[Established alerts]
+  E --> F[Audit persistence]
+  E --> G[Hot-query persistence]
+  E --> H[Aggregation trigger plane]
+  E --> I[Downstream alert reasoning plane]
+  H --> I
+  F --> J[Runtime projection plane]
+  G --> J
+  I --> J
+  J --> K[Operator console]
 ```
 
-## Current System
+The same architecture is also illustrated in the repository documentation:
 
-The repository runs three planes. The edge ingestion plane owns rotated file discovery, checkpoint progression, replay semantics, and fact normalization. The core streaming plane owns Kafka transport, deterministic alert confirmation, audit persistence, ClickHouse lookup, alert clustering, and suggestion generation. The runtime projection plane owns snapshot assembly, stream deltas, strategy controls, and the operator-facing console.
+![System flow map](<documentation/images/System Flow Map.png>)
 
-`core/aiops_agent` currently supports `alert` and `cluster` scopes. The default provider path is `template`. The downstream reasoning path already carries deterministic runtime seeds and structured reasoning contracts. `reasoning_runtime_seed` contains `candidate_event_graph`, `investigation_session`, `reasoning_trace_seed`, and `runbook_plan_outline`. `evidence_pack_v2` is attached to every evidence bundle and is the stable input object for downstream reasoning. `hypothesis_set`, `review_verdict`, `runbook_draft`, and `reasoning_stage_requests` are now emitted as first-class suggestion fields or attached payload contracts. The frontend projector, convergence field, and node inspector can read the structured reasoning objects directly.
+In object-chain terms, the alert path is:
 
-Completed downstream modules on the current branch are: `candidate_event_graph`, `investigation_session`, `reasoning_trace_seed`, `runbook_plan_outline`, `evidence_pack_v2`, `phase_context_router`, `hypothesis_set`, `review_verdict`, `runbook_draft`, `provider_routing`, and `reasoning_stage_requests`. The next unfinished step is the real remote model path for `hypothesis_critique` and `runbook_draft`.
+`alert -> evidence bundle -> reasoning runtime seed -> Evidence Pack V2 -> HypothesisSet -> ReviewVerdict -> RunbookDraft -> ReasoningStageRequests -> runtime projection`
 
-`core/aiops_agent/alert_reasoning_runtime` is a code package. It does not hold live runtime data. Runtime artifacts stay under `/data/netops-runtime`. The package currently contains deterministic seed builders, session objects, phase routing, runbook outline generation, and trace scaffolding for the downstream reasoning path.
+In cluster terms, the only difference is the entry point: repeated patterns under the same key replace a single alert as the trigger. The downstream object layer, stage matrix, and frontend projection surface remain shared rather than splitting into two independent systems.
 
-## Runtime Facts
+## Current Delivery Status
 
-The mounted runtime under `/data/netops-runtime` currently contains `691` alert JSONL files and `201003` alert records from `2026-03-04T15:09:11+00:00` to `2026-04-02T16:23:04+00:00`. It contains `603` suggestion JSONL files and `222023` suggestion records from `2026-03-09T05:08:56.549849+00:00` to `2026-04-05T18:03:18.303384+00:00`. The latest 24 alert partitions contain `1452` `deny_burst_v1|warning` alerts and `1` `bytes_spike_v1|critical` alert. The latest 24 suggestion partitions contain `1690` `alert` suggestions and `32` `cluster` suggestions.
+The repository already contains stable implementations of the following core structures:
 
-This traffic shape is low QPS. It is enough to validate deterministic correlation, evidence assembly, structured suggestion emission, cluster gating, runtime replay, and bounded post-alert reasoning. It does not justify local large-model hosting on the current core node.
+- `reasoning_runtime_seed`
+- `candidate_event_graph`
+- `investigation_session`
+- `reasoning_trace_seed`
+- `runbook_plan_outline`
+- `Evidence Pack V2`
+- `HypothesisSet`
+- `ReviewVerdict`
+- `RunbookDraft`
+- `ReasoningStageRequests`
 
-## Reasoning Objects
+These structures show that the current focus is no longer whether a model can be connected at all, but whether evidence, hypothesis, review, planning, and stage contracts have been turned into stable typed objects first. The frontend already reflects that direction: the main operator view, convergence field, node inspector, and compare workbench all treat structured objects as the primary product, rather than relying on free-form natural-language summaries as the only source of meaning.
 
-The current downstream reasoning contract is built around five objects and one stage-request layer.
+The current frontend runtime surfaces are documented below:
 
-`Evidence Pack V2` is attached at `evidence_bundle["evidence_pack_v2"]`. It fixes `direct_evidence`, `supporting_evidence`, `contradictory_evidence`, `missing_evidence`, `freshness`, `source_reliability`, `lineage`, and `summary`. Each evidence entry carries `evidence_id`, `kind`, `status`, `label`, `value`, `source_section`, `source_field`, `source_ref`, and `rationale`.
+![Frontend runtime projection](<documentation/images/前端主页面投影.png>)
 
-`HypothesisSet` is built from `InferenceResult` and `Evidence Pack V2`. It fixes `set_id`, `primary_hypothesis_id`, `items`, and `summary`. Each hypothesis item carries `hypothesis_id`, `rank`, `statement`, `confidence_score`, `confidence_label`, `support_evidence_refs`, `contradict_evidence_refs`, `missing_evidence_refs`, `next_best_action`, and `review_state`.
+![Explanation benchmark field](<documentation/images/Explanation Benchmark Field UI坐标图.png>)
 
-`ReviewVerdict` is built from `Evidence Pack V2`, `HypothesisSet`, and `runbook_plan_outline`. It fixes `verdict_id`, `verdict_status`, `recommended_disposition`, `approval_required`, `blocking_issues`, `checks`, and `review_summary`. `checks` currently cover `evidence_sufficiency`, `temporal_freshness`, `topology_consistency`, `overreach_risk`, `remediation_executability`, and `rollback_readiness`.
+## Feature Count Reference
 
-`RunbookPlanOutline` is the current deterministic planning seed. It keeps `prechecks`, `operator_actions`, `approval_boundary`, and `rollback_guidance` attached to the suggestion path without opening any write path.
+The tables below consolidate the current `edge -> core` feature-count contract in one place. The counts are based on object shapes actually produced by the codebase rather than concept-only wording. Any mounted runtime artifact that still follows an older schema is called out explicitly.
 
-`RunbookDraft` is the current structured planning output. It fixes `plan_id`, `plan_scope`, `plan_status`, `title`, `applicability`, `hypothesis_ref`, `hypothesis_statement`, `prechecks`, `operator_actions`, `boundaries`, `rollback_guidance`, `approval_boundary`, `evidence_refs`, and `change_summary`. The frontend convergence field now prefers this object over local prose assembly.
+### Edge Plane
 
-`ReasoningStageRequests` is the last local-only layer before real model-backed reasoning. It materializes `hypothesis_critique` and `runbook_draft` as structured request contracts with stage-specific phase context, routing hints, attached reasoning objects, and expected response schemas. These request objects are now attached to each suggestion payload for audit and replay preparation. They are not executed yet.
+| Plane | Stage / Object | Top-level feature count | Key nested or supporting notes | Remarks |
+| --- | --- | ---: | --- | --- |
+| edge | raw vendor log input | `47` | `4` syslog header fields + `43` FortiGate KV fields | Vendor-log contract before parser normalization |
+| edge | ingest structured event | `66` | `source=3`, `device_profile<=9`, `kv_subset<=56` | Parsed JSONL emitted by `fortigate-ingest` |
+| edge | forwarder -> Kafka fact | `66` | top-level unchanged | `edge_forwarder` filters and forwards without rewriting the payload schema |
 
-Phase routing already exists. `hypothesis_generate` reads direct/supporting/contradictory/missing evidence. `hypothesis_critique` reads direct/supporting/contradictory. `runbook_retrieve` and `runbook_draft` reads direct/supporting/missing. `runbook_review` reads direct/contradictory/missing.
+### Core Plane
 
-## Rule-Based Baseline
+| Plane | Stage / Object | Top-level feature count | Key nested or supporting notes | Remarks |
+| --- | --- | ---: | --- | --- |
+| core | correlator input fact | `66` | Same structured fact shape forwarded from edge Kafka input | Input contract of the deterministic plane |
+| core | deterministic alert | `12` | `dimensions=1`, `metrics=3`, `event_excerpt=31`, `topology_context=13`, `device_profile=12`, `change_context=6` | Current alert JSONL matches the code path |
+| core | alerts sink JSONL | `12` | Same shape as deterministic alert | Audit persistence only; no schema rewrite |
+| core | ClickHouse alert row | `17` columns | Includes `metrics_json`, `dimensions_json`, `event_excerpt_json`, `topology_context_json`, `device_profile_json`, `change_context_json` | Storage-row contract rather than payload contract |
+| core | cluster trigger | `6` | `ClusterKey=4` | Exists only when repeated-pattern aggregation is hit |
+| core | evidence bundle | `16` | `alert_ref=3`, `historical_context=9`, `rule_context=5`, `path_context=6`, `policy_context=3`, `sample_context=1`, `window_context=3`, `topology_context=14`, `device_context=12`, `change_context=6` | Shared object layer for alert-scope and cluster-scope |
+| core | reasoning runtime seed | `6` | `candidate_event_graph=9`, `investigation_session=9`, `reasoning_trace_seed=6`, `runbook_plan_outline=10` | Alert-scope version |
+| core | cluster reasoning runtime seed | `7` | Adds `cluster_context=6` on top of the alert-scope seed | Cluster-scope version |
+| core | candidate event graph | `9` | `node item=5`, `edge item=7` | Internal runtime-seed object |
+| core | investigation session | `9` | `working_memory_seed=5` | Internal runtime-seed object |
+| core | reasoning trace seed | `6` | No additional fixed nested object | Internal runtime-seed object |
+| core | runbook plan outline | `10` | `applicability=3`, `approval_boundary=3` | Internal runtime-seed object |
+| core | Evidence Pack V2 | `14` | `alert_ref=3`, `freshness=2`, `source_reliability=1`, `summary=4`, `evidence entry item=9` | Typed evidence input used by hypothesis, review, and runbook stages |
+| core | inference request | `12` | `expected_response_schema=6` | Strongly typed pre-provider request object |
+| core | inference result | `12` | No additional fixed nested object | Normalized provider result |
+| core | HypothesisSet | `6` | `hypothesis item=10` | Structured hypothesis object |
+| core | ReviewVerdict | `9` | `checks=6`, single check=`2` | Structured review object |
+| core | RunbookDraft | `15` | `applicability=3`, `approval_boundary=3`, `change_summary=2` | Structured runbook draft |
+| core | reasoning stage requests | `2` stages | Each stage request=`10`, `input_contract=3`, `routing_hint=12` | Currently fixed to `hypothesis_critique` and `runbook_draft` |
+| core | suggestion payload (final emitted schema) | `24` | `context=17`, `inference=12`, `reasoning_stage_requests=2` | Final persisted payload = structured suggestion plus stage requests |
+| core | suggestion JSONL (latest runtime artifact) | `24` | `context=17`, `evidence_bundle=16`, `reasoning_runtime_seed=6` | The latest mounted runtime file is aligned to the new schema; older historical files can be backfilled with the migration utility |
 
-The baseline path is fully deterministic from raw fact ingestion to alert confirmation and first-pass suggestion emission. `edge/fortigate-ingest` parses vendor syslog, tracks rotated files, advances checkpoints, preserves source provenance, and emits normalized fact JSONL with stable identifiers and timestamps. `edge/edge_forwarder` forwards those parsed facts to `netops.facts.raw.v1` without adding model inference or open-ended interpretation.
+## Operating Boundaries
 
-`core/correlator` is the baseline decision engine. It consumes `netops.facts.raw.v1`, applies quality-gate checks, matches rule definitions, aggregates events inside fixed windows, compares metrics against thresholds, and emits `netops.alerts.v1`. The current baseline logic includes explicit rule matching, severity mapping, alert cooldown handling, and deterministic alert payload assembly. The alert object already carries `rule_id`, `severity`, `metrics`, `dimensions`, `event_excerpt`, `topology_context`, `device_profile`, and `change_context`.
+The project currently maintains six explicit boundaries:
 
-`core/alerts_sink` and `core/alerts_store` are also part of the baseline. `core/alerts_sink` writes hourly alert JSONL as the audit surface. `core/alerts_store` writes the same alerts into ClickHouse as the hot query surface for `recent_similar_1h`, recent samples, and bounded history lookup. `core/aiops_agent/cluster_aggregator.py` extends the baseline with same-key repeated-pattern detection. It groups by rule, severity, service, and source device key. It applies `AIOPS_CLUSTER_WINDOW_SEC`, `AIOPS_CLUSTER_MIN_ALERTS`, and `AIOPS_CLUSTER_COOLDOWN_SEC`. It emits a deterministic cluster trigger only when the same-key gate is naturally reached.
+- Alert-establishment boundary: the model must not decide whether an alert is valid in the first place.
+- Execution boundary: suggestions are not written back to devices automatically.
+- Approval boundary: any action beyond read-only diagnosis must stop before human approval.
+- Rollback boundary: a plan without rollback preparation cannot be elevated into an execution output.
+- Transport boundary: the edge ingestion plane does not participate in model reasoning or stage orchestration.
+- Data-contract boundary: future remote models may consume only explicit stage requests, not arbitrary runtime files or full repository context.
 
-The current suggestion path still has a deterministic baseline mode. The `template` provider converts a confirmed alert or confirmed cluster trigger into a bounded suggestion with `summary`, `hypotheses`, `recommended_actions`, `confidence`, and `projection_basis`. This path is deterministic in the sense that it only reads structured alert-side evidence, follows fixed logic branches, and produces stable output for the same input bundle. It does not read raw logs directly. It does not revise whether an alert is valid. It does not open any write path.
+## Current Runtime Facts
 
-The repository therefore already has a clean baseline for comparison. The baseline includes deterministic parsing, deterministic alert confirmation, deterministic history lookup, deterministic cluster gating, deterministic evidence assembly, and deterministic template suggestion generation.
+The currently mounted runtime surface shows the following:
 
-## LLM Enhancement Scope
+- The alert artifact set contains `691` hourly files and `201003` total records, covering `2026-03-04T15:09:11+00:00` through `2026-04-02T16:23:04+00:00`.
+- The suggestion artifact set contains `603` hourly files and `222023` total records, covering `2026-03-09T05:08:56.549849+00:00` through `2026-04-05T18:03:18.303384+00:00`.
+- The latest 24 alert buckets are still dominated by `deny_burst_v1|warning`.
+- The latest 24 suggestion buckets remain primarily `alert` scope, while `cluster` scope represents a smaller share.
 
-The LLM path is downstream-only. It starts from a confirmed alert contract or a confirmed cluster trigger. It does not replace `fortigate-ingest`. It does not replace `edge_forwarder`. It does not replace `core/correlator`. It does not decide whether the alert should exist.
+This distribution indicates a low-QPS, tightly constrained, strongly fallback-oriented downstream reasoning workload. It is sufficient for structured evidence, structured hypotheses, structured review, structured runbook drafting, and replay-based evaluation, but it is not an appropriate shape for permanently colocating a large model on the existing core nodes.
 
-The first LLM-oriented enhancement is object normalization. `evidence_bundle` now carries `reasoning_runtime_seed` and `evidence_pack_v2`. `reasoning_runtime_seed` binds the alert to `candidate_event_graph`, `investigation_session`, `reasoning_trace_seed`, and `runbook_plan_outline`. `Evidence Pack V2` turns heterogeneous context into stable evidence groups. `direct_evidence` captures confirmed fields such as `alert.rule_id`, `alert.severity`, `topology.service`, `topology.src_device_key`, `path.path_signature`, and `rule.metrics`. `supporting_evidence` captures bounded history and context attachments such as `history.recent_similar_1h`, `history.cluster_size`, `topology.neighbor_refs`, `history.recent_alert_samples`, `change.change_refs`, `device.known_services`, and `policy.recent_policy_hits`. `contradictory_evidence` records facts that weaken a hypothesis, such as `recent_similar_1h=0`, cluster gate not reached, or no attached change signal. `missing_evidence` records absent fields explicitly instead of leaving them implicit.
+## Resource Planning Conclusions
 
-The second enhancement is structured reasoning output. `HypothesisSet` turns free-form hypothesis strings into ranked hypothesis items with evidence references, confidence labels, missing evidence references, next-best action pointers, and review state. `ReviewVerdict` turns a free-form suggestion into a bounded review result with explicit checks for evidence sufficiency, temporal freshness, topology consistency, overreach risk, remediation executability, and rollback readiness. These objects are now emitted into the suggestion payload and projected through the gateway into the frontend. The frontend inspector slab and projector no longer need to infer all reasoning state from prose alone.
+The current resource-planning conclusion is straightforward:
 
-The third enhancement is structured planning output. `runbook_draft.py` now combines `HypothesisSet`, `ReviewVerdict`, `runbook_plan_outline`, and bounded recommended actions into a typed runbook draft. That output keeps plan state, approval boundary, evidence references, and change summary attached to the suggestion payload instead of leaving the planning surface inside free text.
+- The edge ingestion plane should remain focused on log intake and fact normalization.
+- Core nodes should remain focused on alert confirmation, evidence assembly, structured object generation, and stage request assembly.
+- Model execution should live in an external GPU service or a controlled API provider.
+- The `template` path must remain a permanent fallback.
+- The first priority is to complete remote reasoning connectivity, response validation, timeout fallback, trace capture, and replay/eval.
+- Only after that should limited domain adaptation become a priority.
+- There is no current need to train a foundation model from scratch.
 
-The fourth enhancement is stage-aware context control. `phase_context_router.py` now slices `Evidence Pack V2` by stage. Hypothesis generation sees direct, supporting, contradictory, and missing evidence. Critique sees direct, supporting, and contradictory evidence. Runbook retrieval and draft see direct, supporting, and missing evidence. Runbook review sees direct, contradictory, and missing evidence. This keeps each stage bounded to the fields it should use.
+## Next Step
 
-The fifth enhancement is future model routing. `provider_routing.py` already emits `compute_target`, `max_parallelism`, `request_kind`, `suggestion_scope`, `candidate_event_graph_id`, `investigation_session_id`, and `runbook_plan_id`. `reasoning_stage_requests` now packages those routing hints with stage-local context for `hypothesis_critique` and `runbook_draft`. The core node can therefore route selected downstream requests to an external GPU service without changing the deterministic baseline path. If the model path is unavailable, the template provider remains the fallback.
+The clearly defined stopping point at this stage is that the local structured pipeline is already closed, while real remote model execution is not yet connected. The next milestone is therefore not to keep expanding local schemas or to keep broadening documentation, but to close the following loop:
 
-## Baseline vs LLM Comparison Points
+- real provider execution
+- response validation
+- timeout / fallback
+- trace capture
+- replay / eval
 
-The repository now exposes comparison points at multiple layers instead of only comparing final summary text.
-
-Baseline vs LLM evidence layer compares the original evidence bundle against `Evidence Pack V2`. The measurement target is whether direct/supporting/contradictory/missing evidence is explicit, whether source lineage is preserved, and whether missing fields are surfaced as structured gaps.
-
-Baseline vs LLM hypothesis layer compares raw `hypotheses: string[]` against `HypothesisSet`. The measurement target is whether hypotheses are ranked, whether support and contradiction references are attached, whether next-best actions are explicit, and whether the frontend can inspect the current primary hypothesis without re-parsing prose.
-
-Baseline vs LLM review layer compares confidence-only suggestion output against `ReviewVerdict`. The measurement target is whether review checks are explicit, whether blocking issues are surfaced, whether approval is attached as data, and whether the final action surface distinguishes accepted projection from operator-gated projection and return-to-evidence paths.
-
-Baseline vs LLM planning layer compares plain recommended actions against `runbook_plan_outline` and `runbook_draft`. The measurement target is whether prechecks, approval boundary, rollback guidance, operator actions, evidence references, and change summary are attached as stable fields rather than buried in text.
-
-Baseline vs LLM runtime layer compares one-shot deterministic suggestion generation against a staged downstream reasoning path. The measurement target is whether the system can preserve deterministic alert confirmation while adding typed evidence, typed hypotheses, typed review, and future model-backed planning without changing the upstream alert contract.
-
-Baseline vs LLM orchestration layer compares one-shot provider inference against stage-scoped request contracts. The measurement target is whether critique and planning requests are reproducible, bounded by phase context, and ready for remote execution without changing the upstream ingest, correlator, or audit surfaces.
-
-## Deployment Boundary
-
-`192.168.1.23` is the edge node. It runs `Intel Xeon E3-1220 v5`, `4` CPU threads, `7.7 GiB` RAM, and `914 GiB` root storage with about `669 GiB` free. This node should stay limited to `fortigate-ingest` and `edge_forwarder`.
-
-`192.168.1.27` is the core node. It runs `Intel Xeon Silver 4310`, `24` CPU threads, `14 GiB` RAM, and `1.8 TiB` root storage with about `1.7 TiB` free. This node hosts Kafka consumers, `core/correlator`, `core/alerts_sink`, `core/alerts_store`, `core/aiops_agent`, and `frontend/gateway`.
-
-The current resource split supports structured evidence assembly, bounded post-alert reasoning, and remote model calls. It does not support hosting a large local model next to Kafka consumers, ClickHouse-backed reads, and the rest of the core services. The repository already reserves remote model access through `AIOPS_PROVIDER=http|gpu_http|external_model_service`, `AIOPS_PROVIDER_ENDPOINT_URL`, `AIOPS_PROVIDER_MODEL`, `AIOPS_PROVIDER_COMPUTE_TARGET`, and `AIOPS_PROVIDER_MAX_PARALLELISM`.
-
-## Verification
-
-```bash
-python3 -m pytest -q tests/core
-pytest -q tests/frontend/test_runtime_reader_snapshot.py tests/frontend/test_runtime_stream_delta.py
-python3 -m compileall -q core edge frontend/gateway
-python3 -m core.benchmark.live_runtime_check
-cd frontend && npm test
-cd frontend && npm run build
-```
-
-The current branch also passes focused tests for `Evidence Pack V2`, `HypothesisSet`, `ReviewVerdict`, runtime snapshot projection, and the frontend node inspector/event-field helpers.
-
-## LLM Resource Planning
-
-The next LLM stage should stay post-alert and stay off the two existing nodes. The current runtime produces about `6918.9` alerts/day, `288.29` alerts/hour, and `0.0801` alerts/second over the measured alert window. It produces about `8062.5` suggestions/day, `335.94` suggestions/hour, and `0.0933` suggestions/second over the measured suggestion window. That volume supports a selective reasoning policy. It does not support default long-chain LLM execution on every suggestion.
-
-The edge node should never execute model inference. The core node should continue to build `evidence_bundle`, `evidence_pack_v2`, `hypothesis_set`, `review_verdict`, provider routing hints, and remote requests. It should not host local 14B+ or 30B+ models. Keep `AIOPS_PROVIDER_MAX_PARALLELISM=1` until queue metrics, provider error metrics, and replay traces are all present.
-
-The first external GPU tier should cover compact triage and structured critique. A practical starting point is one remote endpoint in the `24 GiB` to `48 GiB` class for compact reasoning and one stronger endpoint in the `48 GiB` to `80 GiB` class for review and runbook drafting. `triage_compact` requests should stay around `1k-2.5k` input tokens. `hypothesis_critique` should stay around `2.5k-4k`. `runbook_draft` should stay around `3k-5k`. `runbook_review` should stay around `2.5k-4.5k`. Keep stage payloads bounded. Keep serialized evidence packs small. Keep the template provider as the mandatory fallback path.
-
-The next capacity steps should follow this order: keep the current foundation path on `template` plus bounded remote samples, add remote GPU endpoints for selective alert-scope and cluster-scope requests, add request queue metrics and cache keys, then raise concurrency only after timeout rate, queue delay, and replay coverage are observable. If remote GPU is not available and the next experiment actually needs model execution, the fallback is an API-backed provider. That step should be gated by cost and data-handling review, not enabled by default.
+Once that loop is complete, the system will move from "structured reasoning objects are in place" to the next stage: "real remote critique and planning are wired into production flow."

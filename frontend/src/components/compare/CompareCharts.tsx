@@ -182,10 +182,12 @@ function FieldLegend(props: {
   locale: 'en' | 'zh'
   x: number
   y: number
+  width?: number
 }) {
+  const legendWidth = props.width ?? 172
   return (
     <g transform={`translate(${props.x} ${props.y})`} className="compare-field-legend">
-      <rect x={0} y={0} width={172} height={54} className="compare-field-legend-plane" />
+      <rect x={0} y={0} width={legendWidth} height={54} className="compare-field-legend-plane" />
       <rect x={12} y={15} width={8} height={8} className="compare-point-baseline compare-point-baseline-hero" />
       <text x={30} y={22} className="compare-axis-label">
         {pick(props.locale, 'baseline', '基线')}
@@ -194,12 +196,12 @@ function FieldLegend(props: {
       <text x={30} y={40} className="compare-axis-label">
         LLM
       </text>
-      <line x1={92} y1={18} x2={118} y2={18} className="compare-pair-link compare-pair-link-legend" />
-      <text x={126} y={22} className="compare-axis-label">
+      <line x1={100} y1={18} x2={132} y2={18} className="compare-pair-link compare-pair-link-legend" />
+      <text x={140} y={22} className="compare-axis-label">
         {pick(props.locale, 'grounded', '有支撑')}
       </text>
-      <line x1={92} y1={36} x2={118} y2={36} className="compare-pair-link is-missing" />
-      <text x={126} y={40} className="compare-axis-label">
+      <line x1={100} y1={36} x2={132} y2={36} className="compare-pair-link is-missing" />
+      <text x={140} y={40} className="compare-axis-label">
         {pick(props.locale, 'unsupported', '无支撑')}
       </text>
     </g>
@@ -217,6 +219,12 @@ function PairedConstellation(props: {
   yLabel: string
   note: string
   onInspectSample: (sampleId: string) => void
+  legendPlacement?: {
+    x: number
+    y: number
+    width?: number
+  }
+  xLabelY?: number
 }) {
   const width = 1180
   const height = 640
@@ -379,7 +387,12 @@ function PairedConstellation(props: {
         <text x={left - 6} y={top - 26} className="compare-benchmark-caption">
           {props.yLabel}
         </text>
-        <text x={width - right} y={height - 14} className="compare-benchmark-caption" textAnchor="end">
+        <text
+          x={width - right}
+          y={props.xLabelY ?? height - 14}
+          className="compare-benchmark-caption"
+          textAnchor="end"
+        >
           {props.xLabel}
         </text>
         <text x={left + 8} y={top + 18} className="compare-secondary-label">
@@ -388,7 +401,12 @@ function PairedConstellation(props: {
         <text x={left + chartWidth * 0.68 + 8} y={top + 18} className="compare-secondary-label">
           {pick(props.locale, 'high evidence field', '高证据区带')}
         </text>
-        <FieldLegend locale={props.locale} x={left} y={height - 66} />
+        <FieldLegend
+          locale={props.locale}
+          x={props.legendPlacement?.x ?? left}
+          y={props.legendPlacement?.y ?? height - 66}
+          width={props.legendPlacement?.width}
+        />
       </svg>
     </FieldFrame>
   )
@@ -1008,6 +1026,8 @@ export function CompareCharts({
           yLabel={pick(locale, 'evidence binding', '证据绑定率')}
           note={pick(locale, 'paired provider outputs / same bundle', '同一 bundle 的两条提供器输出')}
           onInspectSample={onInspectSample}
+          legendPlacement={{ x: 108, y: 438, width: 204 }}
+          xLabelY={608}
         />
 
         <div className="compare-secondary-grid compare-secondary-grid-benchmark">

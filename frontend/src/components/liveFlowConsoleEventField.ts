@@ -74,6 +74,34 @@ interface BuildIncidentConvergenceModelInput {
   selectedRefreshSummary: string
 }
 
+function resolvedRunbookDraft(linkedSuggestion: SuggestionRecord) {
+  const draft = linkedSuggestion.runbookDraft
+  const applicability = draft?.applicability
+
+  return {
+    title:
+      typeof draft?.title === 'string' && draft.title.trim().length > 0
+        ? draft.title.trim()
+        : '',
+    applicability: {
+      service:
+        typeof applicability?.service === 'string' ? applicability.service : '',
+      pathSignature:
+        typeof applicability?.pathSignature === 'string'
+          ? applicability.pathSignature
+          : '',
+    },
+    prechecks: Array.isArray(draft?.prechecks) ? draft.prechecks : [],
+    operatorActions: Array.isArray(draft?.operatorActions)
+      ? draft.operatorActions
+      : [],
+    boundaries: Array.isArray(draft?.boundaries) ? draft.boundaries : [],
+    rollbackGuidance: Array.isArray(draft?.rollbackGuidance)
+      ? draft.rollbackGuidance
+      : [],
+  }
+}
+
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value))
 }
@@ -185,6 +213,7 @@ function buildRunbookDraft(
     selectedScopeMeaning,
     selectedRefreshSummary,
   } = input
+  const runbookDraft = resolvedRunbookDraft(linkedSuggestion)
   const service = linkedSuggestion.context.service
   const device =
     typeof linkedSuggestion.evidenceBundle.device.device_name === 'string' &&
@@ -193,14 +222,14 @@ function buildRunbookDraft(
       : linkedSuggestion.context.srcDeviceKey
   const labels = evidenceLabels(linkedSuggestion, locale)
   const actions =
-    linkedSuggestion.runbookDraft.operatorActions.length > 0
-      ? linkedSuggestion.runbookDraft.operatorActions.slice(0, 4)
+    runbookDraft.operatorActions.length > 0
+      ? runbookDraft.operatorActions.slice(0, 4)
       : linkedSuggestion.recommendedActions.length > 0
         ? linkedSuggestion.recommendedActions.slice(0, 3)
       : [selectedRecommendation]
   const rollback =
-    linkedSuggestion.runbookDraft.rollbackGuidance.length > 0
-      ? linkedSuggestion.runbookDraft.rollbackGuidance
+    runbookDraft.rollbackGuidance.length > 0
+      ? runbookDraft.rollbackGuidance
       : locale === 'zh'
         ? [
             '当前没有下发动作，因此不生成设备侧回滚命令',
@@ -211,8 +240,8 @@ function buildRunbookDraft(
             'rerun the tuple check if the path widens beyond the current slice',
           ]
   const boundaries =
-    linkedSuggestion.runbookDraft.boundaries.length > 0
-      ? linkedSuggestion.runbookDraft.boundaries
+    runbookDraft.boundaries.length > 0
+      ? runbookDraft.boundaries
       : locale === 'zh'
         ? [
             '当前页面只输出建议，不执行设备写回',
@@ -227,15 +256,15 @@ function buildRunbookDraft(
 
   if (locale === 'zh') {
     return {
-      title: linkedSuggestion.runbookDraft.title || 'Runbook 草案',
+      title: runbookDraft.title || 'Runbook 草案',
       scopeLabel: `${service} / ${device}`,
       applicability:
-        linkedSuggestion.runbookDraft.applicability.pathSignature.trim().length > 0
-          ? `${linkedSuggestion.runbookDraft.applicability.service} · ${linkedSuggestion.runbookDraft.applicability.pathSignature}`
+        runbookDraft.applicability.pathSignature.trim().length > 0
+          ? `${runbookDraft.applicability.service} · ${runbookDraft.applicability.pathSignature}`
           : `${linkedSuggestion.scope}-scope · ${linkedSuggestion.context.provider}`,
       prechecks: [
-        ...linkedSuggestion.runbookDraft.prechecks.slice(0, 4),
-        ...(linkedSuggestion.runbookDraft.prechecks.length > 0
+        ...runbookDraft.prechecks.slice(0, 4),
+        ...(runbookDraft.prechecks.length > 0
           ? []
           : [
               `事件窗口 ${selectedWindowSummary}`,
@@ -252,15 +281,15 @@ function buildRunbookDraft(
   }
 
   return {
-    title: linkedSuggestion.runbookDraft.title || 'Runbook draft',
+    title: runbookDraft.title || 'Runbook draft',
     scopeLabel: `${service} / ${device}`,
     applicability:
-      linkedSuggestion.runbookDraft.applicability.pathSignature.trim().length > 0
-        ? `${linkedSuggestion.runbookDraft.applicability.service} · ${linkedSuggestion.runbookDraft.applicability.pathSignature}`
+      runbookDraft.applicability.pathSignature.trim().length > 0
+        ? `${runbookDraft.applicability.service} · ${runbookDraft.applicability.pathSignature}`
         : `${linkedSuggestion.scope}-scope · ${linkedSuggestion.context.provider}`,
     prechecks: [
-      ...linkedSuggestion.runbookDraft.prechecks.slice(0, 4),
-      ...(linkedSuggestion.runbookDraft.prechecks.length > 0
+      ...runbookDraft.prechecks.slice(0, 4),
+      ...(runbookDraft.prechecks.length > 0
         ? []
         : [
             `event window ${selectedWindowSummary}`,

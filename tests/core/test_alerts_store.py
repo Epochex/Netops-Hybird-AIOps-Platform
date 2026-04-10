@@ -44,7 +44,7 @@ def test_to_row_maps_alert_fields() -> None:
     }
     row = _to_row(alert)
 
-    assert len(row) == 14
+    assert len(row) == 17
     assert row[2] == "a-1"
     assert row[3] == "deny_burst_v1"
     assert row[4] == "warning"
@@ -56,3 +56,6 @@ def test_to_row_maps_alert_fields() -> None:
     assert '"count":12' in row[10]
     assert '"src_device_key":"dev-1"' in row[11]
     assert '"service":"udp/3702"' in row[12]
+    assert row[13] == "{}"
+    assert row[14] == "{}"
+    assert row[15] == "{}"
