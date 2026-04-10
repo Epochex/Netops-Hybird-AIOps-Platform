@@ -153,3 +153,18 @@ The clearly defined stopping point at this stage is that the local structured pi
 - replay / eval
 
 Once that loop is complete, the system will move from "structured reasoning objects are in place" to the next stage: "real remote critique and planning are wired into production flow."
+
+## LCORE-D Data Adaptation
+
+The benchmark data path is now prepared for `LCORE-D: A Benchmark Dataset for Core Network Analysis` (`https://data.mendeley.com/datasets/77sztrg5ks/2`). This source is more suitable than the office-only FortiGate trace for topology-aware and fault-localization work because it provides 407 hours of ISP monitoring data with ten benchmark fault labels: single link failure, multiple link failure, misconfiguration, routing misconfiguration, line card failure, ICMP blocked by firewall, node failure, multiple nodes failures, single node failure, and SNMP agent failure.
+
+The adapter entry point is:
+
+```bash
+python3 -m core.benchmark.lcore_adaptive_prepare \
+  --input /data/lcore-d \
+  --output-jsonl /data/netops-runtime/lcore/events.jsonl \
+  --plan-json /data/netops-runtime/lcore/feature-plan.json
+```
+
+It automatically discovers time, label, entity, topology, metric, and categorical fields, then emits canonical fact JSONL for the existing core pipeline. The correlator also includes `annotated_fault_v1`, a benchmark-safe rule that preserves those ten scenarios and triggers on fault annotation transitions without changing the non-model alert-establishment boundary.

@@ -153,3 +153,18 @@ flowchart LR
 - 回放 / 评测
 
 完成这一步之后，系统才会从“结构化推理对象已经就位”迈入下一阶段，即“真实远端 critique 与 planning 已经接入生产链路”。
+
+## LCORE-D 数据适配
+
+当前已经为 `LCORE-D: A Benchmark Dataset for Core Network Analysis` 准备了 benchmark 数据路径：`https://data.mendeley.com/datasets/77sztrg5ks/2`。相比办公室 FortiGate 单一 trace，这个数据源更适合后续做 topology-aware 和 fault-localization 方向，因为它提供 407 小时的 ISP 核心网监控数据，并带有 10 个 benchmark 故障标签：single link failure、multiple link failure、misconfiguration、routing misconfiguration、line card failure、ICMP blocked by firewall、node failure、multiple nodes failures、single node failure 和 SNMP agent failure。
+
+适配入口如下：
+
+```bash
+python3 -m core.benchmark.lcore_adaptive_prepare \
+  --input /data/lcore-d \
+  --output-jsonl /data/netops-runtime/lcore/events.jsonl \
+  --plan-json /data/netops-runtime/lcore/feature-plan.json
+```
+
+该模块会自动发现时间列、标签列、实体列、拓扑列、数值指标列和低基数字段，并输出现有 core pipeline 可消费的 canonical fact JSONL。correlator 也新增了 `annotated_fault_v1`，用于保留这 10 个场景，并在带 fault annotation 的 benchmark 数据中按实体/场景转移触发告警，同时不改变“模型不能参与首轮告警成立”的边界。
