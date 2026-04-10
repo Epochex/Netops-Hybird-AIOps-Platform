@@ -123,3 +123,51 @@ def test_lcore_d_compact_class_wins_over_device_status_fields() -> None:
     assert plan.label_fields[0] == "class"
     assert event["fault_context"]["label_value"] == "F"
     assert event["fault_context"]["scenario"] == "induced_fault"
+
+
+def test_lcore_d_topology_contract_uses_stable_device_identity() -> None:
+    rows = [
+        {
+            "timestamp": "1760264160",
+            "ICMP loss": "100",
+            "B8_ Interface_ type": "6",
+            "B8_Operational_ status": "1",
+            "class": "H",
+            "router_name": "CORE-R4",
+            "hop_to_server": "5",
+            "hop_to_core": "3",
+            "downstream_dependents": "4",
+            "path_up": "1",
+            "_source_file": "/data/netops-runtime/LCORE-D/raw/LCORE-D R4.csv",
+        },
+        {
+            "timestamp": "1760266680",
+            "ICMP loss": "100",
+            "B8_ Interface_ type": "6",
+            "B8_Operational_ status": "1",
+            "class": "F",
+            "router_name": "CORE-R4",
+            "hop_to_server": "5",
+            "hop_to_core": "3",
+            "downstream_dependents": "4",
+            "path_up": "0",
+            "_source_file": "/data/netops-runtime/LCORE-D/raw/LCORE-D R4.csv",
+        },
+    ]
+
+    plan = AdaptiveFeatureExtractor(max_sample_rows=10).build_plan(rows)
+    event = row_to_canonical_event(rows[1], plan, 1)
+    topology = event["topology_context"]
+
+    assert event["src_device_key"] == "CORE-R4"
+    assert event["device_profile"]["device_name"] == "CORE-R4"
+    assert event["device_profile"]["src_device_key"] == "CORE-R4"
+    assert topology["path_signature"] == "CORE-R4|hop_core=3|hop_server=5|path_up=0"
+    assert "/data/" not in topology["path_signature"]
+    assert topology["hop_to_core"] == "3"
+    assert topology["hop_to_server"] == "5"
+    assert topology["downstream_dependents"] == "4"
+    assert topology["path_up"] == "0"
+    assert topology["srcintf"] == ""
+    assert topology["interface_type"] == "6"
+    assert event["fault_context"]["scenario"] == "induced_fault"

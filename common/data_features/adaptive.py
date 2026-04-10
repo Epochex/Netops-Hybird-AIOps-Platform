@@ -297,7 +297,7 @@ def build_feature_plan(
 def row_to_canonical_event(row: Mapping[str, Any], plan: FeaturePlan, row_index: int = 0) -> dict[str, Any]:
     event_ts, timestamp_source = _event_timestamp(row, plan, row_index)
     fault_state = infer_fault_state(row, plan)
-    entity_key = _first_non_empty(row, plan.entity_fields) or _first_non_empty(row, plan.topology_fields) or "unknown"
+    entity_key = _entity_key(row, plan)
     topology_context = _build_topology_context(row, plan, entity_key)
     service = _first_by_markers(row, _SERVICE_MARKERS)
     feature_vector = _feature_vector(row, plan.metric_fields)
@@ -494,7 +494,8 @@ def _build_topology_context(row: Mapping[str, Any], plan: FeaturePlan, entity_ke
     src = _first_by_name(row, ["src", "source", "source_node", "from", "from_node", "src_node"])
     dst = _first_by_name(row, ["dst", "dest", "destination", "target", "to", "to_node", "dst_node"])
     link = _first_by_name(row, ["link", "link_id", "edge", "circuit"])
-    interface = _first_by_name(row, ["interface", "ifname", "port"])
+    interface = _first_interface_name(row)
+    interface_type = _first_interface_type(row)
     site = _first_by_name(row, ["site", "pop", "location"])
     zone = _first_by_name(row, ["zone", "area", "domain"])
     neighbor = _first_by_name(row, ["neighbor", "peer", "next_hop"])
@@ -503,7 +504,15 @@ def _build_topology_context(row: Mapping[str, Any], plan: FeaturePlan, entity_ke
     downstream_dependents = _first_by_name(row, ["downstream_dependents", "downstream"])
     path_up = _first_by_name(row, ["path_up", "path status", "path_state"])
 
-    path_parts = [item for item in [src or entity_key, link, dst] if item]
+    path_signature = _path_signature(
+        entity_key=entity_key,
+        src=src,
+        dst=dst,
+        link=link,
+        hop_to_core=hop_to_core,
+        hop_to_server=hop_to_server,
+        path_up=path_up,
+    )
     topology = {
         "service": _first_by_markers(row, _SERVICE_MARKERS),
         "srcip": _first_by_name(row, ["srcip", "src_ip", "source_ip"]),
@@ -514,7 +523,7 @@ def _build_topology_context(row: Mapping[str, Any], plan: FeaturePlan, entity_ke
         "dstintfrole": "",
         "site": site,
         "zone": zone,
-        "path_signature": "->".join(path_parts) if path_parts else entity_key,
+        "path_signature": path_signature,
         "policyid": "",
         "policytype": "",
         "neighbor_refs": [neighbor] if neighbor else [],
@@ -522,6 +531,7 @@ def _build_topology_context(row: Mapping[str, Any], plan: FeaturePlan, entity_ke
         "hop_to_core": hop_to_core,
         "downstream_dependents": downstream_dependents,
         "path_up": path_up,
+        "interface_type": interface_type,
         "topology_feature_fields": plan.topology_fields,
     }
     return topology
@@ -531,12 +541,13 @@ def _build_device_profile(row: Mapping[str, Any], plan: FeaturePlan, entity_key:
     role = _first_by_name(row, ["role", "device_role", "node_type", "router_type"])
     name = _first_by_name(row, ["name", "device_name", "node_name", "hostname", "router"])
     site = _first_by_name(row, ["site", "pop", "location"])
+    device_name = name or entity_key
     return {
         "src_device_key": entity_key,
         "device_role": role,
         "site": site,
         "vendor": "",
-        "device_name": name or entity_key,
+        "device_name": device_name,
         "osname": "",
         "family": "lcore-d",
         "srcmac": "",
@@ -582,10 +593,100 @@ def _select_metric_value(row: Mapping[str, Any], metric_fields: list[str], marke
     return int(sum(values))
 
 
+def _entity_key(row: Mapping[str, Any], plan: FeaturePlan) -> str:
+    explicit = _first_by_name(
+        row,
+        [
+            "device_name",
+            "router_name",
+            "node_name",
+            "hostname",
+            "router",
+            "node",
+            "source_node",
+            "src_node",
+        ],
+    )
+    if explicit and not _looks_like_low_semantic_entity("entity", explicit):
+        return explicit
+
+    entity = _first_non_empty(row, plan.entity_fields)
+    if entity:
+        return entity
+
+    topology_entity = _first_non_empty(row, plan.topology_fields)
+    if topology_entity:
+        return topology_entity
+
+    return "unknown"
+
+
+def _path_signature(
+    entity_key: str,
+    src: str,
+    dst: str,
+    link: str,
+    hop_to_core: str,
+    hop_to_server: str,
+    path_up: str,
+) -> str:
+    path_parts = [item for item in [src or entity_key, link, dst] if item and not _looks_like_local_path(item)]
+    if len(path_parts) > 1:
+        return "->".join(path_parts)
+
+    topology_state = []
+    if hop_to_core:
+        topology_state.append(f"hop_core={hop_to_core}")
+    if hop_to_server:
+        topology_state.append(f"hop_server={hop_to_server}")
+    if path_up:
+        topology_state.append(f"path_up={path_up}")
+
+    if topology_state:
+        return f"{entity_key}|" + "|".join(topology_state)
+    return entity_key
+
+
+def _first_interface_name(row: Mapping[str, Any]) -> str:
+    names = {
+        "interface",
+        "ifname",
+        "port",
+        "srcintf",
+        "src_interface",
+        "source_interface",
+    }
+    for key, value in row.items():
+        if str(key).startswith("_"):
+            continue
+        normalized = _normalize_name(str(key))
+        if "interface_type" in normalized:
+            continue
+        if normalized in names or normalized.endswith("_ifname") or normalized.endswith("_interface"):
+            text = _clean_text(value)
+            if text and not text.isdigit():
+                return text
+    return ""
+
+
+def _first_interface_type(row: Mapping[str, Any]) -> str:
+    for key, value in row.items():
+        if str(key).startswith("_"):
+            continue
+        normalized = _normalize_name(str(key))
+        if "interface_type" in normalized:
+            text = _clean_text(value)
+            if text:
+                return text
+    return ""
+
+
 def _first_non_empty(row: Mapping[str, Any], fields: list[str]) -> str:
     for field_name in fields:
+        if str(field_name).startswith("_"):
+            continue
         text = _clean_text(row.get(field_name))
-        if text:
+        if text and not _looks_like_low_semantic_entity(field_name, text):
             return text
     return ""
 
@@ -593,8 +694,10 @@ def _first_non_empty(row: Mapping[str, Any], fields: list[str]) -> str:
 def _first_by_name(row: Mapping[str, Any], names: list[str]) -> str:
     wanted = {_normalize_name(name) for name in names}
     for key, value in row.items():
+        if str(key).startswith("_"):
+            continue
         normalized = _normalize_name(str(key))
-        if normalized in wanted or any(wanted_name in normalized for wanted_name in wanted):
+        if normalized in wanted or any(_normalized_name_matches(normalized, wanted_name) for wanted_name in wanted):
             text = _clean_text(value)
             if text:
                 return text
@@ -608,6 +711,43 @@ def _first_by_markers(row: Mapping[str, Any], markers: set[str]) -> str:
             if text:
                 return text
     return ""
+
+
+def _looks_like_local_path(value: str) -> bool:
+    text = _clean_text(value)
+    return text.startswith("/") or "/data/" in text or "\\" in text
+
+
+def _normalized_name_matches(normalized: str, wanted_name: str) -> bool:
+    if normalized == wanted_name:
+        return True
+    if normalized.startswith(f"{wanted_name}_") or normalized.endswith(f"_{wanted_name}"):
+        return True
+    tokens = normalized.split("_")
+    if wanted_name in {"src", "dst", "to", "from", "source", "dest", "destination", "target"}:
+        return tokens[0] == wanted_name or tokens[-1] == wanted_name
+    if wanted_name == "name":
+        return tokens[-1] == "name"
+    return False
+
+
+def _looks_like_low_semantic_entity(field_name: str, value: str) -> bool:
+    text = _clean_text(value)
+    normalized = _normalize_name(str(field_name))
+    if _looks_like_local_path(text):
+        return True
+    if text.isdigit():
+        return True
+    low_semantic_markers = {
+        "interface_type",
+        "duplex_status",
+        "operational_status",
+        "hop_to_core",
+        "hop_to_server",
+        "path_up",
+        "downstream_dependents",
+    }
+    return any(marker in normalized for marker in low_semantic_markers)
 
 
 def _is_fault_label(value: Any) -> bool:
