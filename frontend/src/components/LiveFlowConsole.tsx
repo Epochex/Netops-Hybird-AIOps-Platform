@@ -168,6 +168,42 @@ function formatProjectorTimer(ms: number) {
   return `${(Math.max(0, ms) / 1000).toFixed(2)}s`
 }
 
+function positiveDurationMs(value: number | null | undefined) {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? value
+    : null
+}
+
+function measuredDurationWindowMs(
+  startedAt: string | null | undefined,
+  endedAt: string | null | undefined,
+) {
+  const startedAtStamp = parseTimestamp(startedAt)
+  const endedAtStamp = parseTimestamp(endedAt)
+  if (!startedAtStamp || !endedAtStamp) {
+    return null
+  }
+
+  const durationMs = endedAtStamp.getTime() - startedAtStamp.getTime()
+  return durationMs > 0 ? durationMs : null
+}
+
+function formatProjectorStationTimer(
+  durationMs: number | null,
+  hasMeasuredRuntime: boolean,
+  locale: 'en' | 'zh',
+) {
+  if (!hasMeasuredRuntime) {
+    return locale === 'zh' ? '回放' : 'demo'
+  }
+
+  if (durationMs === null) {
+    return 'n/a'
+  }
+
+  return formatProjectorTimer(durationMs)
+}
+
 function isIpLike(value: string) {
   return /^(?:\d{1,3}\.){3}\d{1,3}$/.test(value) || value.includes(':')
 }
@@ -1504,35 +1540,60 @@ function projectorPlaybackStepMs(
   })
 }
 
-function projectorStationElapsedMs(
-  stepDurations: number[],
-  index: number,
-  elapsedMs: number,
+function projectorMeasuredStepMs(
+  stations: ProjectorStation[],
+  suggestion: SuggestionRecord,
 ) {
-  const stageDuration = stepDurations[index] ?? 0
-  const stageStartMs = stepDurations
-    .slice(0, index)
-    .reduce((total, durationMs) => total + durationMs, 0)
-
-  return Math.min(stageDuration, Math.max(0, elapsedMs - stageStartMs))
-}
-
-function projectorDisplayStepMs(
-  playbackStepDurations: number[],
-  displayDurationMs: number,
-) {
-  const playbackTotalMs = playbackStepDurations.reduce(
-    (total, durationMs) => total + durationMs,
-    0,
+  const telemetryLookup = new Map(
+    (suggestion.stageTelemetry ?? []).map((item) => [item.stageId, item]),
   )
-
-  if (playbackTotalMs <= 0 || displayDurationMs <= 0) {
-    return playbackStepDurations
-  }
-
-  return playbackStepDurations.map(
-    (durationMs) => (durationMs / playbackTotalMs) * displayDurationMs,
+  const timelineLookup = new Map(
+    (suggestion.timeline ?? [])
+      .filter((item): item is typeof item & { stageId: string } => Boolean(item.stageId))
+      .map((item) => [item.stageId, item]),
   )
+  const sourceTs =
+    telemetryLookup.get('raw-topic')?.endedAt ??
+    telemetryLookup.get('ingest')?.endedAt ??
+    telemetryLookup.get('fortigate')?.endedAt
+  const handoffTs =
+    telemetryLookup.get('raw-topic')?.endedAt ??
+    telemetryLookup.get('forwarder')?.endedAt ??
+    telemetryLookup.get('ingest')?.endedAt
+  const alertTs =
+    telemetryLookup.get('alerts-topic')?.endedAt ??
+    telemetryLookup.get('correlator')?.endedAt
+  const suggestionTs =
+    telemetryLookup.get('suggestions-topic')?.endedAt ??
+    telemetryLookup.get('aiops-agent')?.endedAt
+
+  return stations.map((station) => {
+    switch (station.id) {
+      case 'projector-trigger':
+        return measuredDurationWindowMs(sourceTs, handoffTs)
+      case 'projector-aggregate':
+        return (
+          positiveDurationMs(telemetryLookup.get('cluster-window')?.durationMs) ??
+          positiveDurationMs(telemetryLookup.get('correlator')?.durationMs) ??
+          positiveDurationMs(timelineLookup.get('correlator')?.durationMs) ??
+          measuredDurationWindowMs(handoffTs ?? sourceTs, alertTs)
+        )
+      case 'projector-path':
+        return positiveDurationMs(timelineLookup.get('alerts-topic')?.durationMs)
+      case 'projector-device':
+        return null
+      case 'projector-inference':
+        return (
+          positiveDurationMs(telemetryLookup.get('aiops-agent')?.durationMs) ??
+          positiveDurationMs(timelineLookup.get('suggestions-topic')?.durationMs) ??
+          measuredDurationWindowMs(alertTs, suggestionTs)
+        )
+      case 'projector-action':
+        return positiveDurationMs(telemetryLookup.get('remediation')?.durationMs)
+      default:
+        return null
+    }
+  })
 }
 
 function playbackIndexForElapsed(
@@ -1914,6 +1975,10 @@ export function LiveFlowConsole({
       ),
     [projectorPlaybackStepDurations],
   )
+  const projectorMeasuredStepDurations = useMemo(
+    () => projectorMeasuredStepMs(projectorStations, linkedSuggestion),
+    [linkedSuggestion, projectorStations],
+  )
   const projectorRuntime = useMemo(
     () =>
       projectorRuntimeMeasurement(
@@ -1926,14 +1991,6 @@ export function LiveFlowConsole({
   const projectorActualDurationMs = projectorRuntime.durationMs
   const projectorDisplayDurationMs =
     projectorActualDurationMs ?? projectorPlaybackDurationMs
-  const projectorDisplayStepDurations = useMemo(
-    () =>
-      projectorDisplayStepMs(
-        projectorPlaybackStepDurations,
-        projectorDisplayDurationMs,
-      ),
-    [projectorDisplayDurationMs, projectorPlaybackStepDurations],
-  )
   const playbackDrivenStation =
     projectorStations[projectorPlaybackIndex] ?? projectorStations[0]
   const selectedProjector =
@@ -1955,9 +2012,12 @@ export function LiveFlowConsole({
     projectorPlaybackDurationMs > 0
       ? Math.min(1, projectorPlaybackElapsedMs / projectorPlaybackDurationMs)
       : 1
-  const projectorDisplayedElapsedMs = projectorPlaybackRunning
-    ? projectorDisplayDurationMs * projectorPlaybackRatio
-    : projectorDisplayDurationMs
+  const projectorDisplayedElapsedMs =
+    projectorActualDurationMs !== null
+      ? projectorDisplayDurationMs
+      : projectorPlaybackRunning
+        ? projectorDisplayDurationMs * projectorPlaybackRatio
+        : projectorDisplayDurationMs
   const projectorRuntimeLabel =
     projectorActualDurationMs !== null
       ? locale === 'zh'
@@ -1968,10 +2028,12 @@ export function LiveFlowConsole({
         : 'demo playback clock'
   const projectorRuntimeNote =
     projectorActualDurationMs !== null
-      ? projectorRuntimeSourceLabel(projectorRuntime.source, locale)
+      ? locale === 'zh'
+        ? `${projectorRuntimeSourceLabel(projectorRuntime.source, locale)}，不是前端回放编排`
+        : `${projectorRuntimeSourceLabel(projectorRuntime.source, locale)}; not the frontend replay schedule`
       : locale === 'zh'
-        ? '未拿到有效阶段时序，当前仅显示前端回放编排'
-        : 'No valid stage timing available; showing the frontend replay clock.'
+        ? `未拿到有效阶段时序，当前仅显示固定 ${formatProjectorTimer(projectorPlaybackDurationMs)} 的前端回放编排`
+        : `No valid stage timing available; showing the fixed ${formatProjectorTimer(projectorPlaybackDurationMs)} frontend replay schedule.`
   const inspectorState = projectorInspectorState(
     selectedProjectorIndex,
     projectorPlaybackIndex,
@@ -2497,11 +2559,10 @@ export function LiveFlowConsole({
                       : isLit
                         ? 'is-complete'
                         : 'is-idle'
-                  const stationElapsedMs = projectorStationElapsedMs(
-                    projectorDisplayStepDurations,
-                    index,
-                    projectorDisplayedElapsedMs ?? 0,
-                  )
+                  const stationElapsedMs =
+                    projectorActualDurationMs !== null
+                      ? projectorMeasuredStepDurations[index] ?? null
+                      : null
 
                   return (
                     <button
@@ -2518,7 +2579,11 @@ export function LiveFlowConsole({
                         <span className="incident-projector-label-head">
                           <strong>{station.title}</strong>
                           <span className={`incident-projector-node-timer ${timerTone}`}>
-                            {formatProjectorTimer(stationElapsedMs)}
+                            {formatProjectorStationTimer(
+                              stationElapsedMs,
+                              projectorActualDurationMs !== null,
+                              locale,
+                            )}
                           </span>
                         </span>
                         <span className="incident-projector-token">{station.token}</span>

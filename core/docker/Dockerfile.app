@@ -6,4 +6,5 @@ WORKDIR /app
 COPY core/requirements.txt /app/core/requirements.txt
 RUN pip install --no-cache-dir -r /app/core/requirements.txt
 
+COPY common /app/common
 COPY core /app/core
