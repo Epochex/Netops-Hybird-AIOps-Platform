@@ -1,107 +1,123 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="560" viewBox="0 0 1800 560">
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900">
 <defs>
-<linearGradient id="panelBg" x1="0" x2="1" y1="0" y2="1">
-<stop offset="0%" stop-color="#ffffff"/>
-<stop offset="100%" stop-color="#f6f7f9"/>
-</linearGradient>
-<pattern id="diag" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
-<line x1="0" y1="0" x2="0" y2="8" stroke="#a7b0bc" stroke-width="2"/>
+<pattern id="noisePattern" width="10" height="10" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+<line x1="0" y1="0" x2="0" y2="10" stroke="#9aa5b3" stroke-width="2" opacity="0.55"/>
 </pattern>
 </defs>
-<rect x="0.0" y="0.0" width="1800.0" height="560.0" rx="0.0" fill="#ffffff" stroke="none" stroke-width="1.0"/>
-<text x="40.0" y="38.0" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="800" text-anchor="start" fill="#111827">Topology-Aware Subgraph Extraction Ablation</text>
-<text x="40.0" y="64.0" font-family="Arial, Helvetica, sans-serif" font-size="16" font-weight="400" text-anchor="start" fill="#667281">Invoke-all baseline vs. topology-gated reasoning on legacy office trace and LCORE-D replay</text>
-<rect x="30.0" y="70.0" width="560.0" height="380.0" rx="18.0" fill="url(#panelBg)" stroke="#c8d0da" stroke-width="1.2"/>
-<text x="52.0" y="108.0" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="700" text-anchor="start" fill="#c54a1f">A</text>
-<text x="92.0" y="108.0" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="700" text-anchor="start" fill="#202733">LLM request volume</text>
-<line x1="105.0" y1="380.0" x2="520.0" y2="380.0" stroke="#293241" stroke-width="1.4"/>
-<line x1="105.0" y1="150.0" x2="105.0" y2="380.0" stroke="#293241" stroke-width="1.4"/>
-<line x1="105.0" y1="380.0" x2="520.0" y2="380.0" stroke="#d8dde5" stroke-width="1.0" stroke-dasharray="3 5"/>
-<text x="93.0" y="385.0" font-family="Arial, Helvetica, sans-serif" font-size="15" font-weight="400" text-anchor="end" fill="#667281">0</text>
-<line x1="105.0" y1="322.5" x2="520.0" y2="322.5" stroke="#d8dde5" stroke-width="1.0" stroke-dasharray="3 5"/>
-<text x="93.0" y="327.5" font-family="Arial, Helvetica, sans-serif" font-size="15" font-weight="400" text-anchor="end" fill="#667281">350</text>
-<line x1="105.0" y1="265.0" x2="520.0" y2="265.0" stroke="#d8dde5" stroke-width="1.0" stroke-dasharray="3 5"/>
-<text x="93.0" y="270.0" font-family="Arial, Helvetica, sans-serif" font-size="15" font-weight="400" text-anchor="end" fill="#667281">700</text>
-<line x1="105.0" y1="207.5" x2="520.0" y2="207.5" stroke="#d8dde5" stroke-width="1.0" stroke-dasharray="3 5"/>
-<text x="93.0" y="212.5" font-family="Arial, Helvetica, sans-serif" font-size="15" font-weight="400" text-anchor="end" fill="#667281">1050</text>
-<line x1="105.0" y1="150.0" x2="520.0" y2="150.0" stroke="#d8dde5" stroke-width="1.0" stroke-dasharray="3 5"/>
-<text x="93.0" y="155.0" font-family="Arial, Helvetica, sans-serif" font-size="15" font-weight="400" text-anchor="end" fill="#667281">1400</text>
-<rect x="178.9" y="234.4" width="44.0" height="145.6" rx="5.0" fill="#26313f" stroke="none" stroke-width="1.0"/>
-<text x="200.9" y="226.4" font-family="Arial, Helvetica, sans-serif" font-size="16" font-weight="700" text-anchor="middle" fill="#26313f">886</text>
-<rect x="236.1" y="380.0" width="44.0" height="0.0" rx="5.0" fill="#7d8794" stroke="none" stroke-width="1.0"/>
-<text x="258.1" y="372.0" font-family="Arial, Helvetica, sans-serif" font-size="16" font-weight="700" text-anchor="middle" fill="#7d8794">0</text>
-<text x="229.5" y="412.0" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="700" text-anchor="middle" fill="#293241">Office</text>
-<rect x="357.3" y="166.1" width="44.0" height="213.9" rx="5.0" fill="#26313f" stroke="none" stroke-width="1.0"/>
-<text x="379.3" y="158.1" font-family="Arial, Helvetica, sans-serif" font-size="16" font-weight="700" text-anchor="middle" fill="#26313f">1302</text>
-<rect x="414.6" y="351.6" width="44.0" height="28.4" rx="5.0" fill="#d95f2d" stroke="none" stroke-width="1.0"/>
-<text x="436.6" y="343.6" font-family="Arial, Helvetica, sans-serif" font-size="16" font-weight="700" text-anchor="middle" fill="#d95f2d">173</text>
-<text x="407.9" y="412.0" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="700" text-anchor="middle" fill="#293241">LCORE-D</text>
-<rect x="129.0" y="122.0" width="16.0" height="16.0" rx="3.0" fill="#26313f" stroke="none" stroke-width="1.0"/>
-<text x="153.0" y="135.0" font-family="Arial, Helvetica, sans-serif" font-size="15" font-weight="400" text-anchor="start" fill="#4d5968">invoke-all baseline</text>
-<rect x="310.0" y="122.0" width="16.0" height="16.0" rx="3.0" fill="#d95f2d" stroke="none" stroke-width="1.0"/>
-<text x="334.0" y="135.0" font-family="Arial, Helvetica, sans-serif" font-size="15" font-weight="400" text-anchor="start" fill="#4d5968">topology-gated</text>
-<path d="M 352.9 168.0 C 402.9 130.0, 467.9 130.0, 513.0 168.0" fill="none" stroke="#d95f2d" stroke-width="2.4"/>
-<text x="430.9" y="120.0" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="800" text-anchor="middle" fill="#d95f2d">-86.71% calls</text>
-<text x="514.0" y="434.0" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="400" text-anchor="end" fill="#667281">requests</text>
-<rect x="620.0" y="70.0" width="560.0" height="380.0" rx="18.0" fill="url(#panelBg)" stroke="#c8d0da" stroke-width="1.2"/>
-<text x="642.0" y="108.0" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="700" text-anchor="start" fill="#c54a1f">B</text>
-<text x="682.0" y="108.0" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="700" text-anchor="start" fill="#202733">Efficiency-quality frontier</text>
-<line x1="695.0" y1="375.0" x2="1095.0" y2="375.0" stroke="#293241" stroke-width="1.4"/>
-<line x1="695.0" y1="150.0" x2="695.0" y2="375.0" stroke="#293241" stroke-width="1.4"/>
-<line x1="695.0" y1="150.0" x2="695.0" y2="375.0" stroke="#e0e5eb" stroke-width="1.0" stroke-dasharray="3 5"/>
-<line x1="695.0" y1="375.0" x2="1095.0" y2="375.0" stroke="#e0e5eb" stroke-width="1.0" stroke-dasharray="3 5"/>
-<text x="695.0" y="400.0" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="400" text-anchor="middle" fill="#667281">0</text>
-<text x="683.0" y="380.0" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="400" text-anchor="end" fill="#667281">0</text>
-<line x1="795.0" y1="150.0" x2="795.0" y2="375.0" stroke="#e0e5eb" stroke-width="1.0" stroke-dasharray="3 5"/>
-<line x1="695.0" y1="318.8" x2="1095.0" y2="318.8" stroke="#e0e5eb" stroke-width="1.0" stroke-dasharray="3 5"/>
-<text x="795.0" y="400.0" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="400" text-anchor="middle" fill="#667281">25</text>
-<text x="683.0" y="323.8" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="400" text-anchor="end" fill="#667281">25</text>
-<line x1="895.0" y1="150.0" x2="895.0" y2="375.0" stroke="#e0e5eb" stroke-width="1.0" stroke-dasharray="3 5"/>
-<line x1="695.0" y1="262.5" x2="1095.0" y2="262.5" stroke="#e0e5eb" stroke-width="1.0" stroke-dasharray="3 5"/>
-<text x="895.0" y="400.0" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="400" text-anchor="middle" fill="#667281">50</text>
-<text x="683.0" y="267.5" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="400" text-anchor="end" fill="#667281">50</text>
-<line x1="995.0" y1="150.0" x2="995.0" y2="375.0" stroke="#e0e5eb" stroke-width="1.0" stroke-dasharray="3 5"/>
-<line x1="695.0" y1="206.2" x2="1095.0" y2="206.2" stroke="#e0e5eb" stroke-width="1.0" stroke-dasharray="3 5"/>
-<text x="995.0" y="400.0" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="400" text-anchor="middle" fill="#667281">75</text>
-<text x="683.0" y="211.2" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="400" text-anchor="end" fill="#667281">75</text>
-<line x1="1095.0" y1="150.0" x2="1095.0" y2="375.0" stroke="#e0e5eb" stroke-width="1.0" stroke-dasharray="3 5"/>
-<line x1="695.0" y1="150.0" x2="1095.0" y2="150.0" stroke="#e0e5eb" stroke-width="1.0" stroke-dasharray="3 5"/>
-<text x="1095.0" y="400.0" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="400" text-anchor="middle" fill="#667281">100</text>
-<text x="683.0" y="155.0" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="400" text-anchor="end" fill="#667281">100</text>
-<path d="M 695.0 150.0 L 1041.8 150.0" fill="none" stroke="#d95f2d" stroke-width="3.0"/>
-<circle cx="695.0" cy="150.0" r="10.0" fill="#26313f" stroke="#ffffff" stroke-width="2.0"/>
-<text x="709.0" y="138.0" font-family="Arial, Helvetica, sans-serif" font-size="15" font-weight="700" text-anchor="start" fill="#26313f">invoke-all</text>
-<text x="709.0" y="158.0" font-family="Arial, Helvetica, sans-serif" font-size="13" font-weight="400" text-anchor="start" fill="#5f6b7a">0% reduction / 100% recall</text>
-<circle cx="1041.8" cy="150.0" r="20.0" fill="#d95f2d" stroke="#ffffff" stroke-width="2.0"/>
-<text x="1037.8" y="120.0" font-family="Arial, Helvetica, sans-serif" font-size="16" font-weight="800" text-anchor="middle" fill="#d95f2d">LCORE topology gate</text>
-<text x="1037.8" y="140.0" font-family="Arial, Helvetica, sans-serif" font-size="13" font-weight="400" text-anchor="middle" fill="#99401e">86.71% reduction / 100% recall</text>
-<circle cx="1095.0" cy="375.0" r="12.0" fill="#a7b0bc" stroke="#ffffff" stroke-width="2.0" opacity="0.65"/>
-<text x="1087.0" y="405.0" font-family="Arial, Helvetica, sans-serif" font-size="13" font-weight="400" text-anchor="end" fill="#687482">office: no high-value labels</text>
-<text x="895.0" y="427.0" font-family="Arial, Helvetica, sans-serif" font-size="15" font-weight="400" text-anchor="middle" fill="#293241">LLM call reduction (%)</text>
-<text x="640.0" y="134.0" font-family="Arial, Helvetica, sans-serif" font-size="15" font-weight="400" text-anchor="start" fill="#293241">high-value recall (%)</text>
-<text x="1091.0" y="168.0" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="700" text-anchor="end" fill="#d95f2d">desired region</text>
-<rect x="969.0" y="178.0" width="122.0" height="26.0" rx="6.0" fill="#fff0e8" stroke="#f0b08f" stroke-width="1.0"/>
-<text x="1030.0" y="196.0" font-family="Arial, Helvetica, sans-serif" font-size="13" font-weight="400" text-anchor="middle" fill="#9a3d1e">low cost + high recall</text>
-<rect x="1210.0" y="70.0" width="560.0" height="380.0" rx="18.0" fill="url(#panelBg)" stroke="#c8d0da" stroke-width="1.2"/>
-<text x="1232.0" y="108.0" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="700" text-anchor="start" fill="#c54a1f">C</text>
-<text x="1272.0" y="108.0" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="700" text-anchor="start" fill="#202733">Evidence compaction inside selected subgraph</text>
-<text x="1285.0" y="151.0" font-family="Arial, Helvetica, sans-serif" font-size="17" font-weight="700" text-anchor="start" fill="#293241">Office legacy</text>
-<rect x="1285.0" y="165.0" width="196.6" height="34.0" rx="7.0" fill="#7d8794" stroke="none" stroke-width="1.0"/>
-<rect x="1481.6" y="165.0" width="108.0" height="34.0" rx="7.0" fill="url(#diag)" stroke="#a7b0bc" stroke-width="1.0"/>
-<text x="1383.3" y="188.0" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="700" text-anchor="middle" fill="#ffffff">selected 2.00</text>
-<text x="1535.6" y="188.0" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="700" text-anchor="middle" fill="#344054">noise 1.10</text>
-<text x="1695.0" y="188.0" font-family="Arial, Helvetica, sans-serif" font-size="15" font-weight="400" text-anchor="start" fill="#4d5968">64.5% retained</text>
-<text x="1285.0" y="246.0" font-family="Arial, Helvetica, sans-serif" font-size="17" font-weight="700" text-anchor="start" fill="#293241">LCORE-D replay</text>
-<rect x="1285.0" y="260.0" width="196.6" height="34.0" rx="7.0" fill="#d95f2d" stroke="none" stroke-width="1.0"/>
-<rect x="1481.6" y="260.0" width="193.4" height="34.0" rx="7.0" fill="url(#diag)" stroke="#a7b0bc" stroke-width="1.0"/>
-<text x="1383.3" y="283.0" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="700" text-anchor="middle" fill="#ffffff">selected 2.00</text>
-<text x="1578.3" y="283.0" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="700" text-anchor="middle" fill="#344054">noise 1.97</text>
-<text x="1695.0" y="283.0" font-family="Arial, Helvetica, sans-serif" font-size="15" font-weight="400" text-anchor="start" fill="#4d5968">50.4% retained</text>
-<text x="1285.0" y="390.0" font-family="Arial, Helvetica, sans-serif" font-size="15" font-weight="400" text-anchor="start" fill="#5f6b7a">Average nodes per alert after deterministic role assignment.</text>
-<text x="1285.0" y="415.0" font-family="Arial, Helvetica, sans-serif" font-size="15" font-weight="400" text-anchor="start" fill="#5f6b7a">Noise remains visible for audit, but is excluded from the core LLM evidence slice.</text>
-<rect x="1285.0" y="447.0" width="16.0" height="16.0" rx="3.0" fill="#d95f2d" stroke="none" stroke-width="1.0"/>
-<text x="1309.0" y="461.0" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="400" text-anchor="start" fill="#4d5968">selected reasoning evidence</text>
-<rect x="1513.0" y="447.0" width="16.0" height="16.0" rx="3.0" fill="url(#diag)" stroke="#a7b0bc" stroke-width="1.0"/>
-<text x="1537.0" y="461.0" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="400" text-anchor="start" fill="#4d5968">noise / non-core evidence</text>
-<text x="40.0" y="535.0" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="400" text-anchor="start" fill="#667281">Data: office legacy trace n=886, LCORE-D 50k replay n=1302. LCORE gate keeps 173 high-value alerts, reduces external LLM calls by 86.71%, and preserves 100% high-value recall.</text>
+<rect x="0.0" y="0.0" width="1600.0" height="900.0" rx="0.0" fill="#ffffff" stroke="none" stroke-width="1.0"/>
+<text x="44.0" y="48.0" font-family="Arial, Helvetica, sans-serif" font-size="30" font-weight="900" text-anchor="start" fill="#1f2933">Topology-Aware Subgraph Extraction: ablation summary</text>
+<text x="44.0" y="78.0" font-family="Arial, Helvetica, sans-serif" font-size="16" font-weight="400" text-anchor="start" fill="#667281">A single-figure comparison of request budget, high-value retention, and evidence compaction.</text>
+<rect x="44.0" y="104.0" width="720.0" height="360.0" rx="16.0" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.2"/>
+<text x="68.0" y="142.0" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="800" text-anchor="start" fill="#d85b2a">A</text>
+<text x="106.0" y="142.0" font-family="Arial, Helvetica, sans-serif" font-size="21" font-weight="800" text-anchor="start" fill="#1f2933">External LLM request budget</text>
+<text x="106.0" y="166.0" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="400" text-anchor="start" fill="#667281">Invoke-all baseline vs. topology-gated dispatch</text>
+<line x1="128.0" y1="188.0" x2="128.0" y2="398.0" stroke="#1f2933" stroke-width="1.2"/>
+<line x1="128.0" y1="398.0" x2="688.0" y2="398.0" stroke="#1f2933" stroke-width="1.2"/>
+<line x1="128.0" y1="398.0" x2="688.0" y2="398.0" stroke="#d9dee7" stroke-width="1.0" stroke-dasharray="4 6"/>
+<text x="116.0" y="403.0" font-family="Arial, Helvetica, sans-serif" font-size="13" font-weight="400" text-anchor="end" fill="#667281">0</text>
+<line x1="128.0" y1="345.5" x2="688.0" y2="345.5" stroke="#d9dee7" stroke-width="1.0" stroke-dasharray="4 6"/>
+<text x="116.0" y="350.5" font-family="Arial, Helvetica, sans-serif" font-size="13" font-weight="400" text-anchor="end" fill="#667281">350</text>
+<line x1="128.0" y1="293.0" x2="688.0" y2="293.0" stroke="#d9dee7" stroke-width="1.0" stroke-dasharray="4 6"/>
+<text x="116.0" y="298.0" font-family="Arial, Helvetica, sans-serif" font-size="13" font-weight="400" text-anchor="end" fill="#667281">700</text>
+<line x1="128.0" y1="240.5" x2="688.0" y2="240.5" stroke="#d9dee7" stroke-width="1.0" stroke-dasharray="4 6"/>
+<text x="116.0" y="245.5" font-family="Arial, Helvetica, sans-serif" font-size="13" font-weight="400" text-anchor="end" fill="#667281">1050</text>
+<line x1="128.0" y1="188.0" x2="688.0" y2="188.0" stroke="#d9dee7" stroke-width="1.0" stroke-dasharray="4 6"/>
+<text x="116.0" y="193.0" font-family="Arial, Helvetica, sans-serif" font-size="13" font-weight="400" text-anchor="end" fill="#667281">1400</text>
+<text x="688.0" y="438.0" font-family="Arial, Helvetica, sans-serif" font-size="13" font-weight="400" text-anchor="end" fill="#667281">dataset slice</text>
+<text x="76.0" y="172.0" font-family="Arial, Helvetica, sans-serif" font-size="13" font-weight="400" text-anchor="start" fill="#667281">requests</text>
+<rect x="243.0" y="265.1" width="46.0" height="132.9" rx="4.0" fill="#26313f" stroke="none" stroke-width="1.0"/>
+<text x="266.0" y="255.1" font-family="Arial, Helvetica, sans-serif" font-size="15" font-weight="800" text-anchor="middle" fill="#26313f">886</text>
+<rect x="307.0" y="398.0" width="46.0" height="0.0" rx="4.0" fill="#8a94a3" stroke="none" stroke-width="1.0"/>
+<text x="330.0" y="388.0" font-family="Arial, Helvetica, sans-serif" font-size="15" font-weight="800" text-anchor="middle" fill="#8a94a3">0</text>
+<text x="298.0" y="426.0" font-family="Arial, Helvetica, sans-serif" font-size="15" font-weight="800" text-anchor="middle" fill="#1f2933">Office</text>
+<text x="298.0" y="446.0" font-family="Arial, Helvetica, sans-serif" font-size="13" font-weight="400" text-anchor="middle" fill="#667281">legacy</text>
+<rect x="483.0" y="202.7" width="46.0" height="195.3" rx="4.0" fill="#26313f" stroke="none" stroke-width="1.0"/>
+<text x="506.0" y="204.0" font-family="Arial, Helvetica, sans-serif" font-size="15" font-weight="800" text-anchor="middle" fill="#26313f">1302</text>
+<rect x="547.0" y="372.1" width="46.0" height="25.9" rx="4.0" fill="#d85b2a" stroke="none" stroke-width="1.0"/>
+<text x="570.0" y="362.1" font-family="Arial, Helvetica, sans-serif" font-size="15" font-weight="800" text-anchor="middle" fill="#d85b2a">173</text>
+<text x="538.0" y="426.0" font-family="Arial, Helvetica, sans-serif" font-size="15" font-weight="800" text-anchor="middle" fill="#1f2933">LCORE-D</text>
+<text x="538.0" y="446.0" font-family="Arial, Helvetica, sans-serif" font-size="13" font-weight="400" text-anchor="middle" fill="#667281">replay</text>
+<rect x="164.0" y="142.0" width="15.0" height="15.0" rx="2.0" fill="#26313f" stroke="none" stroke-width="1.0"/>
+<text x="188.0" y="154.0" font-family="Arial, Helvetica, sans-serif" font-size="13" font-weight="400" text-anchor="start" fill="#667281">invoke-all</text>
+<rect x="278.0" y="142.0" width="15.0" height="15.0" rx="2.0" fill="#d85b2a" stroke="none" stroke-width="1.0"/>
+<text x="302.0" y="154.0" font-family="Arial, Helvetica, sans-serif" font-size="13" font-weight="400" text-anchor="start" fill="#667281">topology-gated</text>
+<rect x="578.0" y="236.0" width="170.0" height="54.0" rx="10.0" fill="#fff2ea" stroke="#f1b798" stroke-width="1.0"/>
+<text x="663.0" y="259.0" font-family="Arial, Helvetica, sans-serif" font-size="13" font-weight="800" text-anchor="middle" fill="#9e3f1c">LCORE-D</text>
+<text x="663.0" y="279.0" font-family="Arial, Helvetica, sans-serif" font-size="16" font-weight="800" text-anchor="middle" fill="#9e3f1c">1302 -&gt; 173 calls</text>
+<text x="538.0" y="466.0" font-family="Arial, Helvetica, sans-serif" font-size="13" font-weight="800" text-anchor="middle" fill="#9e3f1c">86.71% reduction</text>
+<rect x="836.0" y="104.0" width="720.0" height="360.0" rx="16.0" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.2"/>
+<text x="860.0" y="142.0" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="800" text-anchor="start" fill="#d85b2a">B</text>
+<text x="898.0" y="142.0" font-family="Arial, Helvetica, sans-serif" font-size="21" font-weight="800" text-anchor="start" fill="#1f2933">Efficiency-quality frontier</text>
+<text x="898.0" y="166.0" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="400" text-anchor="start" fill="#667281">Call reduction is only useful if high-value alerts are retained</text>
+<rect x="1330.0" y="190.0" width="100.0" height="16.4" rx="6.0" fill="#ecf8f0" stroke="#b8dfc3" stroke-width="1.0"/>
+<text x="1418.0" y="210.0" font-family="Arial, Helvetica, sans-serif" font-size="13" font-weight="800" text-anchor="end" fill="#287044">target region</text>
+<line x1="930.0" y1="395.0" x2="1430.0" y2="395.0" stroke="#1f2933" stroke-width="1.2"/>
+<line x1="930.0" y1="190.0" x2="930.0" y2="395.0" stroke="#1f2933" stroke-width="1.2"/>
+<line x1="930.0" y1="190.0" x2="930.0" y2="395.0" stroke="#d9dee7" stroke-width="1.0" stroke-dasharray="4 6"/>
+<line x1="930.0" y1="395.0" x2="1430.0" y2="395.0" stroke="#d9dee7" stroke-width="1.0" stroke-dasharray="4 6"/>
+<text x="930.0" y="419.0" font-family="Arial, Helvetica, sans-serif" font-size="13" font-weight="400" text-anchor="middle" fill="#667281">0</text>
+<text x="918.0" y="400.0" font-family="Arial, Helvetica, sans-serif" font-size="13" font-weight="400" text-anchor="end" fill="#667281">0</text>
+<line x1="1055.0" y1="190.0" x2="1055.0" y2="395.0" stroke="#d9dee7" stroke-width="1.0" stroke-dasharray="4 6"/>
+<line x1="930.0" y1="343.8" x2="1430.0" y2="343.8" stroke="#d9dee7" stroke-width="1.0" stroke-dasharray="4 6"/>
+<text x="1055.0" y="419.0" font-family="Arial, Helvetica, sans-serif" font-size="13" font-weight="400" text-anchor="middle" fill="#667281">25</text>
+<text x="918.0" y="348.8" font-family="Arial, Helvetica, sans-serif" font-size="13" font-weight="400" text-anchor="end" fill="#667281">25</text>
+<line x1="1180.0" y1="190.0" x2="1180.0" y2="395.0" stroke="#d9dee7" stroke-width="1.0" stroke-dasharray="4 6"/>
+<line x1="930.0" y1="292.5" x2="1430.0" y2="292.5" stroke="#d9dee7" stroke-width="1.0" stroke-dasharray="4 6"/>
+<text x="1180.0" y="419.0" font-family="Arial, Helvetica, sans-serif" font-size="13" font-weight="400" text-anchor="middle" fill="#667281">50</text>
+<text x="918.0" y="297.5" font-family="Arial, Helvetica, sans-serif" font-size="13" font-weight="400" text-anchor="end" fill="#667281">50</text>
+<line x1="1305.0" y1="190.0" x2="1305.0" y2="395.0" stroke="#d9dee7" stroke-width="1.0" stroke-dasharray="4 6"/>
+<line x1="930.0" y1="241.2" x2="1430.0" y2="241.2" stroke="#d9dee7" stroke-width="1.0" stroke-dasharray="4 6"/>
+<text x="1305.0" y="419.0" font-family="Arial, Helvetica, sans-serif" font-size="13" font-weight="400" text-anchor="middle" fill="#667281">75</text>
+<text x="918.0" y="246.2" font-family="Arial, Helvetica, sans-serif" font-size="13" font-weight="400" text-anchor="end" fill="#667281">75</text>
+<line x1="1430.0" y1="190.0" x2="1430.0" y2="395.0" stroke="#d9dee7" stroke-width="1.0" stroke-dasharray="4 6"/>
+<line x1="930.0" y1="190.0" x2="1430.0" y2="190.0" stroke="#d9dee7" stroke-width="1.0" stroke-dasharray="4 6"/>
+<text x="1430.0" y="419.0" font-family="Arial, Helvetica, sans-serif" font-size="13" font-weight="400" text-anchor="middle" fill="#667281">100</text>
+<text x="918.0" y="195.0" font-family="Arial, Helvetica, sans-serif" font-size="13" font-weight="400" text-anchor="end" fill="#667281">100</text>
+<text x="1180.0" y="447.0" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="400" text-anchor="middle" fill="#1f2933">LLM call reduction (%)</text>
+<text x="860.0" y="172.0" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="400" text-anchor="start" fill="#1f2933">high-value recall (%)</text>
+<path d="M 930.0 190.0 L 1363.5 190.0" fill="none" stroke="#d85b2a" stroke-width="3.2"/>
+<circle cx="930.0" cy="190.0" r="10.0" fill="#26313f" stroke="#ffffff" stroke-width="2.0"/>
+<text x="948.0" y="195.0" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="800" text-anchor="start" fill="#26313f">invoke-all baseline</text>
+<circle cx="1363.5" cy="190.0" r="14.0" fill="#d85b2a" stroke="#ffffff" stroke-width="2.0"/>
+<rect x="1252.0" y="232.0" width="160.0" height="62.0" rx="9.0" fill="#fff2ea" stroke="#f1b798" stroke-width="1.0"/>
+<text x="1332.0" y="254.0" font-family="Arial, Helvetica, sans-serif" font-size="13" font-weight="800" text-anchor="middle" fill="#9e3f1c">topology gate</text>
+<text x="1332.0" y="274.0" font-family="Arial, Helvetica, sans-serif" font-size="13" font-weight="400" text-anchor="middle" fill="#9e3f1c">86.71% fewer calls</text>
+<text x="1332.0" y="291.0" font-family="Arial, Helvetica, sans-serif" font-size="12" font-weight="400" text-anchor="middle" fill="#9e3f1c">100% high-value recall</text>
+<rect x="982.0" y="228.0" width="222.0" height="56.0" rx="10.0" fill="#f1f5f9" stroke="#d5dde7" stroke-width="1.0"/>
+<text x="998.0" y="252.0" font-family="Arial, Helvetica, sans-serif" font-size="13" font-weight="800" text-anchor="start" fill="#1f2933">Office legacy slice</text>
+<text x="998.0" y="272.0" font-family="Arial, Helvetica, sans-serif" font-size="12" font-weight="400" text-anchor="start" fill="#667281">0 high-value labels; not a localization benchmark</text>
+<text x="1381.5" y="195.0" font-family="Arial, Helvetica, sans-serif" font-size="13" font-weight="800" text-anchor="start" fill="#9e3f1c">173 / 173 retained</text>
+<rect x="44.0" y="514.0" width="1512.0" height="330.0" rx="16.0" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.2"/>
+<text x="68.0" y="552.0" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="800" text-anchor="start" fill="#d85b2a">C</text>
+<text x="106.0" y="552.0" font-family="Arial, Helvetica, sans-serif" font-size="21" font-weight="800" text-anchor="start" fill="#1f2933">Evidence compaction and audit surface</text>
+<text x="106.0" y="576.0" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="400" text-anchor="start" fill="#667281">Selected nodes form the LLM slice; noise nodes remain visible for audit</text>
+<text x="150.0" y="609.0" font-family="Arial, Helvetica, sans-serif" font-size="16" font-weight="800" text-anchor="start" fill="#1f2933">Office legacy</text>
+<rect x="150.0" y="625.0" width="443.5" height="38.0" rx="7.0" fill="#8a94a3" stroke="none" stroke-width="1.0"/>
+<rect x="593.5" y="625.0" width="243.7" height="38.0" rx="7.0" fill="url(#noisePattern)" stroke="#9aa5b3" stroke-width="1.0"/>
+<text x="371.8" y="650.0" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="800" text-anchor="middle" fill="#ffffff">selected 2.00</text>
+<text x="715.4" y="650.0" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="800" text-anchor="middle" fill="#1f2933">noise 1.10</text>
+<text x="1056.0" y="650.0" font-family="Arial, Helvetica, sans-serif" font-size="15" font-weight="800" text-anchor="start" fill="#1f2933">64.5% selected</text>
+<text x="150.0" y="687.0" font-family="Arial, Helvetica, sans-serif" font-size="16" font-weight="800" text-anchor="start" fill="#1f2933">LCORE-D replay</text>
+<rect x="150.0" y="703.0" width="443.5" height="38.0" rx="7.0" fill="#d85b2a" stroke="none" stroke-width="1.0"/>
+<rect x="593.5" y="703.0" width="436.5" height="38.0" rx="7.0" fill="url(#noisePattern)" stroke="#9aa5b3" stroke-width="1.0"/>
+<text x="371.8" y="728.0" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="800" text-anchor="middle" fill="#ffffff">selected 2.00</text>
+<text x="811.8" y="728.0" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="800" text-anchor="middle" fill="#1f2933">noise 1.97</text>
+<text x="1056.0" y="728.0" font-family="Arial, Helvetica, sans-serif" font-size="15" font-weight="800" text-anchor="start" fill="#1f2933">50.4% selected</text>
+<rect x="1190.0" y="608.0" width="250.0" height="54.0" rx="10.0" fill="#ffffff" stroke="#d7dee8" stroke-width="1.0"/>
+<text x="1208.0" y="628.0" font-family="Arial, Helvetica, sans-serif" font-size="12" font-weight="800" text-anchor="start" fill="#667281">LCORE alerts</text>
+<text x="1208.0" y="651.0" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="900" text-anchor="start" fill="#1f2933">1302</text>
+<text x="1322.0" y="651.0" font-family="Arial, Helvetica, sans-serif" font-size="12" font-weight="400" text-anchor="start" fill="#667281">50k replay sample</text>
+<rect x="1190.0" y="678.0" width="250.0" height="54.0" rx="10.0" fill="#ffffff" stroke="#d7dee8" stroke-width="1.0"/>
+<text x="1208.0" y="698.0" font-family="Arial, Helvetica, sans-serif" font-size="12" font-weight="800" text-anchor="start" fill="#667281">High-value kept</text>
+<text x="1208.0" y="721.0" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="900" text-anchor="start" fill="#d85b2a">173 / 173</text>
+<text x="1322.0" y="721.0" font-family="Arial, Helvetica, sans-serif" font-size="12" font-weight="400" text-anchor="start" fill="#667281">100% recall</text>
+<rect x="1190.0" y="748.0" width="250.0" height="54.0" rx="10.0" fill="#ffffff" stroke="#d7dee8" stroke-width="1.0"/>
+<text x="1208.0" y="768.0" font-family="Arial, Helvetica, sans-serif" font-size="12" font-weight="800" text-anchor="start" fill="#667281">LLM calls saved</text>
+<text x="1208.0" y="791.0" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="900" text-anchor="start" fill="#d85b2a">1129</text>
+<text x="1322.0" y="791.0" font-family="Arial, Helvetica, sans-serif" font-size="12" font-weight="400" text-anchor="start" fill="#667281">vs invoke-all baseline</text>
+<rect x="710.0" y="551.0" width="16.0" height="16.0" rx="3.0" fill="#d85b2a" stroke="none" stroke-width="1.0"/>
+<text x="734.0" y="564.0" font-family="Arial, Helvetica, sans-serif" font-size="13" font-weight="400" text-anchor="start" fill="#667281">selected reasoning evidence</text>
+<rect x="950.0" y="551.0" width="16.0" height="16.0" rx="3.0" fill="url(#noisePattern)" stroke="#9aa5b3" stroke-width="1.0"/>
+<text x="974.0" y="564.0" font-family="Arial, Helvetica, sans-serif" font-size="13" font-weight="400" text-anchor="start" fill="#667281">noise / non-core evidence</text>
+<text x="44.0" y="878.0" font-family="Arial, Helvetica, sans-serif" font-size="13" font-weight="400" text-anchor="start" fill="#667281">Data: Office legacy n=886; LCORE-D 50k replay n=1302. Topology gate dispatches 173 LCORE-D alerts, saving 1129 external LLM calls while retaining all 173 high-value alerts.</text>
 </svg>
