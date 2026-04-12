@@ -112,6 +112,18 @@ Figure: one-shot ablation summary. Panel A compares invoke-all and topology-gate
 
 The measured result is not yet final root-cause top-1 accuracy. It is a first-stage systems result: the topology gate reduces LLM calls by `86.71%` on the LCORE-D replay while preserving `100%` of high-value alert eligibility. The next evaluation step is to attach incident-window root labels and report root-candidate, symptom, and noise classification accuracy.
 
+## GPU Provider Replay
+
+The external-provider path now has a hard topology gate. If `llm_invocation_gate.should_invoke_llm=false`, the `gpu_http` provider returns the local template fallback and records `external_provider_skipped=true`; it does not call the GPU endpoint. If the gate is true, the request can be routed through the Waseda GPU tunnel to the NetOps LLM gateway.
+
+The dry-run replay validates the dispatch policy and response contract before the live GPU endpoint is attached:
+
+![Topology-gated LLM replay summary](documentation/images/llm_provider_replay_summary.png)
+
+The current dry-run replay scanned `1302` LCORE-D alerts, planned `173` topology-gated external calls, skipped `1129` template-only alerts, preserved `100%` high-value recall, and produced `100%` schema-valid fallback responses. Live GPU latency and model-quality numbers must be regenerated after the Waseda endpoint is running.
+
+Operational details are documented in [`documentation/WASEDA_GPU_LLM_PROVIDER.md`](documentation/WASEDA_GPU_LLM_PROVIDER.md).
+
 ## Model Execution Plan
 
 The current system should not colocate a large model inside the core pipeline. The core node should stay focused on deterministic alerting, evidence assembly, and runtime projection. Model execution should be attached as a provider behind an explicit stage request interface.

@@ -112,6 +112,18 @@ office trace 可以作为历史工程链路 sanity check，但在当前评测窗
 
 当前数字还不是最终 root-cause top-1 accuracy。它是第一阶段系统结果：在 LCORE-D replay 上，topology gate 将 LLM 调用减少 `86.71%`，同时保留 `100%` high-value alert eligibility。下一步评测需要接入 incident-window root labels，并报告 root-candidate、symptom、noise 的分类准确率。
 
+## GPU 推理服务回放
+
+外部推理服务路径现在已经有硬拓扑门控。如果 `llm_invocation_gate.should_invoke_llm=false`，`gpu_http` provider 会直接返回本地模板兜底，并记录 `external_provider_skipped=true`；它不会访问 GPU endpoint。如果 gate 为 true，请求可以通过早稻田 GPU 隧道进入 NetOps LLM gateway。
+
+当前 dry-run replay 用于在真实 GPU endpoint 接入前验证调度策略和响应契约：
+
+![Topology-gated LLM replay summary](documentation/images/llm_provider_replay_summary.png)
+
+当前 dry-run replay 扫描 `1302` 条 LCORE-D 告警，计划 `173` 次 topology-gated 外部调用，跳过 `1129` 条 template-only 告警，保留 `100%` high-value recall，并得到 `100%` schema-valid 兜底响应。真实 GPU 延迟和模型质量数字需要等早稻田 endpoint 跑起来后重新生成。
+
+运行细节见 [`documentation/WASEDA_GPU_LLM_PROVIDER.md`](documentation/WASEDA_GPU_LLM_PROVIDER.md)。
+
 ## 模型执行计划
 
 当前系统不应该把大模型 colocate 到 core pipeline 内部。core 节点应继续专注确定性告警、证据组装与 runtime projection。模型执行应该作为 provider，通过显式 stage request interface 接入。
