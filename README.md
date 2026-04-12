@@ -168,30 +168,29 @@ Remaining:
 - trace capture for replayable model evaluations
 - comparison against rule-only and invoke-all baselines over full LCORE-D incident windows
 
-## Useful Commands
+## Replay Identity and Looping
 
-Prepare LCORE-D facts:
+LCORE-D replay now has an explicit `run_id`. The edge streamer writes it into `dataset_context.run_id`, stores it in the streamer checkpoint, and includes it in the canonical `event_id` hash. This means a later replay of the same LCORE row can be treated as a new experiment run instead of being dropped by the core duplicate gate as the same historical fact.
 
-```bash
-python3 -m core.benchmark.lcore_adaptive_prepare \
-  --input /data/netops-runtime/LCORE-D/raw \
-  --output-jsonl /data/netops-runtime/LCORE-D/work/events-sample.jsonl \
-  --plan-json /data/netops-runtime/LCORE-D/work/feature-plan-core.json \
-  --max-records 50000
-```
+Looped sending is feasible for system health checks, but it should be treated as synthetic replay traffic. It is useful for verifying the end-to-end path after the LLM provider is attached, especially Kafka transport, core ingest, alerting, evidence assembly, and UI freshness. It should not be mixed into paper-grade dataset statistics unless each loop is tagged as a separate run and excluded or grouped deliberately during evaluation.
 
-Run topology-gate ablation:
+Operational boundary:
 
-```bash
-python3 -m core.benchmark.topology_subgraph_ablation \
-  --alert-dir /data/netops-runtime/LCORE-D/work/alerts-sample \
-  --limit-files 0 \
-  --output-json /data/netops-runtime/LCORE-D/work/topology-subgraph-ablation.json
-```
+- One-shot replay remains the default and stops at EOF.
+- The edge forwarder loops as a file scanner, but only sends newly appended JSONL lines after its byte checkpoint.
+- The core consumer loops on Kafka, but does not replay historical offsets unless the consumer group is reset.
+- If LCORE streamer loop mode is enabled, each loop must use a distinct `run_id`; otherwise duplicate `event_id` values are expected to be dropped.
 
-Validate the current branch:
+## Runtime Feature and Throughput Record
 
-```bash
-python3 -m pytest tests/core/test_topology_subgraph.py tests/core/test_aiops_agent.py tests/common/test_adaptive_features.py tests/core/test_rules.py -q
-cd frontend && PATH=/data/.local/node/bin:$PATH npm run build
-```
+This table records the r230 edge to r450 core LCORE-D replay throughput observed during the active replay window.
+
+| Stage | Runtime object | Feature count observed | Runtime volume | Throughput observed | Notes |
+| --- | --- | ---: | ---: | ---: | --- |
+| LCORE-D raw CSV | Source rows | `32-51` columns per file, `234` union columns across 7 files | `169,712` rows, `26,670,593` bytes | offline source | Per-router files: R1/R5/R7 `42`, R2 `32`, R3/R6 `51`, R4 `47` columns |
+| Adaptive feature plan | `feature-plan.json` | `43` sampled columns, `1` label field, `4` entity fields, `7` topology fields, `3` metric fields | plan built from `5,000` sampled rows | one plan per replay | Active label field is `class`; active topology fields include `Hop_to_core`, `Hop_to_server`, and `path_up` |
+| Edge canonical fact JSONL | `events-lcore-d.jsonl` | `23` top-level fields; nested: topology `19`, device profile `12`, fault context `5`, dataset context `12` in the recorded run | `169,761` lines, `326,025,599` bytes | latest completed streamer segment `17.12 EPS` | New replays add `dataset_context.run_id`, so dataset context becomes `13` fields while top-level count stays `23` |
+| Edge forwarder to Kafka | Kafka topic `netops.facts.raw.v1` | Same canonical fact payload: `23` top-level fields | cumulative `169,886` sent, `326,276,448` bytes, `0` dropped | active window `17.06 EPS`, about `0.268 Mbps` | Cumulative count includes earlier smoke/replay sends |
+| Core correlator ingest | Quality-gated facts | Canonical fact consumed from Kafka: `23` top-level fields | log counter `ingested=135,881`, `accepted=135,832`, `drop_duplicate_event_id=49` | stable window `17.30 accepted facts/s` | Other drops were `0`: missing fields, parse status, JSON errors, DLQ |
+| Deterministic alert | `annotated_fault_v1` alert | `12` top-level fields; nested: dimensions `2`, metrics `3`, event excerpt `31`, topology `19`, device profile `12`, change context `6` | log counter `alerts_emitted=3,416` | stable window `0.0396 alerts/s` | Alerting is post-quality-gate and deterministic; LLM is not in this path |
+| Runtime suggestion tail | `netops.aiops.suggestions.v1` | `24` top-level fields; nested: context `17`, evidence bundle `17`, inference `12`, runtime seed `7`, hypothesis set `6`, review verdict `9`, runbook draft `15`, stage requests `2` | topic latest offsets sum to `293,458` messages across mixed history | downstream AI rate depends on alert emission and LLM gate policy | Latest tail sample confirms the current 24-field suggestion schema |

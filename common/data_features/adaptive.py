@@ -239,9 +239,10 @@ class AdaptiveFeatureExtractor:
         rows: Iterable[Mapping[str, Any]],
         plan: FeaturePlan,
         start_index: int = 0,
+        run_id: str = "",
     ) -> Iterable[dict[str, Any]]:
         for offset, row in enumerate(rows, start=start_index):
-            yield row_to_canonical_event(row, plan, offset)
+            yield row_to_canonical_event(row, plan, offset, run_id=run_id)
 
 
 def build_feature_plan(
@@ -294,7 +295,12 @@ def build_feature_plan(
     )
 
 
-def row_to_canonical_event(row: Mapping[str, Any], plan: FeaturePlan, row_index: int = 0) -> dict[str, Any]:
+def row_to_canonical_event(
+    row: Mapping[str, Any],
+    plan: FeaturePlan,
+    row_index: int = 0,
+    run_id: str = "",
+) -> dict[str, Any]:
     event_ts, timestamp_source = _event_timestamp(row, plan, row_index)
     fault_state = infer_fault_state(row, plan)
     entity_key = _entity_key(row, plan)
@@ -312,7 +318,7 @@ def row_to_canonical_event(row: Mapping[str, Any], plan: FeaturePlan, row_index:
 
     return {
         "schema_version": 1,
-        "event_id": _stable_event_id(plan.dataset_id, row_index, row),
+        "event_id": _stable_event_id(plan.dataset_id, row_index, row, run_id=run_id),
         "host": plan.dataset_id,
         "event_ts": event_ts,
         "type": "telemetry",
@@ -332,6 +338,7 @@ def row_to_canonical_event(row: Mapping[str, Any], plan: FeaturePlan, row_index:
         "fault_context": fault_state,
         "dataset_context": {
             "dataset_id": plan.dataset_id,
+            "run_id": run_id,
             "source_uri": plan.source_uri,
             "row_index": row_index,
             "timestamp_source": timestamp_source,
@@ -796,9 +803,9 @@ def _normalize_scenario(value: Any) -> str:
     return text or "unknown_fault"
 
 
-def _stable_event_id(dataset_id: str, row_index: int, row: Mapping[str, Any]) -> str:
+def _stable_event_id(dataset_id: str, row_index: int, row: Mapping[str, Any], run_id: str = "") -> str:
     raw = json.dumps(row, sort_keys=True, ensure_ascii=True, default=str)
-    seed = f"{dataset_id}|{row_index}|{raw}"
+    seed = f"{dataset_id}|{run_id}|{row_index}|{raw}"
     return hashlib.sha256(seed.encode("utf-8")).hexdigest()[:32]
 
 

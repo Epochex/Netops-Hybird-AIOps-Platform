@@ -20,6 +20,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--output-jsonl", required=True, help="Canonical fact JSONL output path.")
     parser.add_argument("--plan-json", required=True, help="Feature discovery plan output path.")
     parser.add_argument("--dataset-id", default="lcore-d")
+    parser.add_argument("--run-id", default="", help="Optional replay/run identifier included in dataset_context and event_id.")
     parser.add_argument("--source-uri", default=LCORE_D_SOURCE_URL)
     parser.add_argument("--sample-rows", type=int, default=5000)
     parser.add_argument("--max-records", type=int, default=0, help="0 means no conversion limit.")
@@ -51,12 +52,13 @@ def main() -> None:
 
     written = 0
     with output_path.open("w", encoding="utf-8") as fp:
-        for event in extractor.transform(row_iter, plan):
+        for event in extractor.transform(row_iter, plan, run_id=args.run_id):
             fp.write(json.dumps(event, ensure_ascii=True, separators=(",", ":")) + "\n")
             written += 1
 
     summary = {
         "dataset_id": args.dataset_id,
+        "run_id": args.run_id,
         "source_uri": args.source_uri,
         "observed_rows_for_plan": plan.observed_rows,
         "total_columns": plan.total_columns,

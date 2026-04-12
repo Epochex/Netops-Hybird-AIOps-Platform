@@ -46,12 +46,16 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--plan-json", default=_env_str("LCORE_PLAN_JSON", "/data/netops-runtime/LCORE-D/work/feature-plan.json"))
     parser.add_argument("--checkpoint-json", default=_env_str("LCORE_CHECKPOINT_JSON", "/data/netops-runtime/LCORE-D/work/stream-checkpoint.json"))
     parser.add_argument("--dataset-id", default=_env_str("LCORE_DATASET_ID", "lcore-d"))
+    parser.add_argument("--run-id", default=_env_str("LCORE_RUN_ID", ""), help="Replay/run identifier included in dataset_context and event_id.")
     parser.add_argument("--source-uri", default=_env_str("LCORE_SOURCE_URI", LCORE_D_SOURCE_URL))
     parser.add_argument("--sample-rows", type=int, default=_env_int("LCORE_SAMPLE_ROWS", 5000))
     parser.add_argument("--events-per-second", type=float, default=_env_float("LCORE_EVENTS_PER_SECOND", 20.0))
     parser.add_argument("--max-records", type=int, default=_env_int("LCORE_MAX_RECORDS", 0), help="0 means stream until EOF.")
     parser.add_argument("--checkpoint-every", type=int, default=_env_int("LCORE_CHECKPOINT_EVERY", 100))
     parser.add_argument("--reset-output", action="store_true", default=_env_str("LCORE_RESET_OUTPUT", "false").lower() in {"1", "true", "yes"})
+    parser.add_argument("--loop", action="store_true", default=_env_str("LCORE_LOOP", "false").lower() in {"1", "true", "yes"}, help="Replay the input again after EOF. Each loop uses a new run_id.")
+    parser.add_argument("--max-loops", type=int, default=_env_int("LCORE_MAX_LOOPS", 0), help="Only used with --loop. 0 means infinite.")
+    parser.add_argument("--loop-sleep-seconds", type=float, default=_env_float("LCORE_LOOP_SLEEP_SECONDS", 5.0))
     return parser.parse_args()
 
 
@@ -79,6 +83,17 @@ def _save_checkpoint(path: Path, checkpoint: dict[str, Any]) -> None:
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     tmp_path.write_text(json.dumps(checkpoint, ensure_ascii=True, sort_keys=True) + "\n", encoding="utf-8")
     tmp_path.replace(path)
+
+
+def _generated_run_id(dataset_id: str) -> str:
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    return f"{dataset_id}-{stamp}"
+
+
+def _cycle_run_id(base_run_id: str, cycle_index: int, loop_enabled: bool) -> str:
+    if not loop_enabled:
+        return base_run_id
+    return f"{base_run_id}-loop-{cycle_index:04d}"
 
 
 def _records(inputs: Iterable[str]) -> Iterable[dict[str, Any]]:
@@ -109,8 +124,14 @@ def main() -> None:
 
     checkpoint = {"next_row_index": 0} if args.reset_output else _load_checkpoint(checkpoint_path)
     next_row_index = int(checkpoint.get("next_row_index", 0))
+    base_run_id = args.run_id or str(checkpoint.get("base_run_id") or checkpoint.get("run_id") or "") or _generated_run_id(args.dataset_id)
+    loop_index = int(checkpoint.get("loop_index", 0))
+    run_id = _cycle_run_id(base_run_id, loop_index, args.loop)
     if args.reset_output:
         output_path.write_text("", encoding="utf-8")
+        checkpoint["base_run_id"] = base_run_id
+        checkpoint["run_id"] = run_id
+        checkpoint["loop_index"] = loop_index
         _save_checkpoint(checkpoint_path, checkpoint)
 
     interval = 0.0 if args.events_per_second <= 0 else 1.0 / args.events_per_second
@@ -118,37 +139,75 @@ def main() -> None:
     started = time.monotonic()
 
     LOGGER.info(
-        "lcore streamer started: inputs=%s output=%s eps=%.2f start_row=%d scenario_values=%s",
+        "lcore streamer started: inputs=%s output=%s eps=%.2f start_row=%d run_id=%s loop=%s scenario_values=%s",
         inputs,
         output_path,
         args.events_per_second,
         next_row_index,
+        run_id,
+        args.loop,
         plan.scenario_values,
     )
 
     with output_path.open("a", encoding="utf-8", buffering=1) as fp:
-        for row_index, row in enumerate(_records(inputs)):
-            if row_index < next_row_index:
-                continue
+        while True:
+            wrote_this_pass = 0
+            for row_index, row in enumerate(_records(inputs)):
+                if row_index < next_row_index:
+                    continue
+                if args.max_records > 0 and streamed >= args.max_records:
+                    break
+
+                event = row_to_canonical_event(row, plan, row_index, run_id=run_id)
+                event["dataset_context"]["stream_source"] = "edge.lcore_streamer"
+                event["dataset_context"]["stream_row_index"] = row_index
+                event["ingest_ts"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                fp.write(json.dumps(event, ensure_ascii=True, separators=(",", ":")) + "\n")
+
+                streamed += 1
+                wrote_this_pass += 1
+                checkpoint["next_row_index"] = row_index + 1
+                checkpoint["base_run_id"] = base_run_id
+                checkpoint["run_id"] = run_id
+                checkpoint["loop_index"] = loop_index
+                checkpoint["last_event_id"] = event["event_id"]
+                checkpoint["last_event_ts"] = event["event_ts"]
+
+                if streamed % max(args.checkpoint_every, 1) == 0:
+                    _save_checkpoint(checkpoint_path, checkpoint)
+
+                if interval > 0:
+                    time.sleep(interval)
+
             if args.max_records > 0 and streamed >= args.max_records:
                 break
 
-            event = row_to_canonical_event(row, plan, row_index)
-            event["dataset_context"]["stream_source"] = "edge.lcore_streamer"
-            event["dataset_context"]["stream_row_index"] = row_index
-            event["ingest_ts"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            fp.write(json.dumps(event, ensure_ascii=True, separators=(",", ":")) + "\n")
+            if not args.loop:
+                break
 
-            streamed += 1
-            checkpoint["next_row_index"] = row_index + 1
-            checkpoint["last_event_id"] = event["event_id"]
-            checkpoint["last_event_ts"] = event["event_ts"]
+            loop_index += 1
+            if args.max_loops > 0 and loop_index >= args.max_loops:
+                break
 
-            if streamed % max(args.checkpoint_every, 1) == 0:
-                _save_checkpoint(checkpoint_path, checkpoint)
+            next_row_index = 0
+            run_id = _cycle_run_id(base_run_id, loop_index, loop_enabled=True)
+            checkpoint["next_row_index"] = 0
+            checkpoint["base_run_id"] = base_run_id
+            checkpoint["run_id"] = run_id
+            checkpoint["loop_index"] = loop_index
+            checkpoint["last_loop_rows"] = wrote_this_pass
+            _save_checkpoint(checkpoint_path, checkpoint)
+            LOGGER.info("lcore streamer loop restart: loop_index=%d run_id=%s", loop_index, run_id)
+            if args.loop_sleep_seconds > 0:
+                time.sleep(args.loop_sleep_seconds)
 
-            if interval > 0:
-                time.sleep(interval)
+            if wrote_this_pass == 0:
+                LOGGER.warning("lcore streamer loop had no rows; stopping to avoid a tight empty loop")
+                break
+
+        checkpoint["base_run_id"] = base_run_id
+        checkpoint["run_id"] = run_id
+        checkpoint["loop_index"] = loop_index
 
     _save_checkpoint(checkpoint_path, checkpoint)
     elapsed = max(time.monotonic() - started, 1e-6)

@@ -171,3 +171,22 @@ def test_lcore_d_topology_contract_uses_stable_device_identity() -> None:
     assert topology["srcintf"] == ""
     assert topology["interface_type"] == "6"
     assert event["fault_context"]["scenario"] == "induced_fault"
+
+
+def test_run_id_is_part_of_canonical_event_identity() -> None:
+    row = {
+        "timestamp": "1760264160",
+        "Device_name": "CORE-R1",
+        "class": "F",
+        "ICMP loss": "100",
+    }
+    plan = AdaptiveFeatureExtractor(max_sample_rows=10).build_plan([row])
+
+    first = row_to_canonical_event(row, plan, 0, run_id="run-a")
+    second = row_to_canonical_event(row, plan, 0, run_id="run-b")
+    repeated = row_to_canonical_event(row, plan, 0, run_id="run-a")
+
+    assert first["dataset_context"]["run_id"] == "run-a"
+    assert second["dataset_context"]["run_id"] == "run-b"
+    assert first["event_id"] != second["event_id"]
+    assert first["event_id"] == repeated["event_id"]

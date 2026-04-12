@@ -168,30 +168,29 @@ office trace 可以作为历史工程链路 sanity check，但在当前评测窗
 - 可回放模型评测的 trace capture
 - 基于完整 LCORE-D incident windows 的 rule-only 与 invoke-all baseline 对比
 
-## 常用命令
+## Replay Identity 与循环发送
 
-准备 LCORE-D facts：
+LCORE-D replay 现在有显式 `run_id`。edge streamer 会把它写入 `dataset_context.run_id`，存入 streamer checkpoint，并纳入 canonical `event_id` 的哈希。这样后续用同一份 LCORE 行数据再次 replay 时，可以被 core 识别为新的实验轮次，而不是被 duplicate gate 当作同一批历史 fact 丢弃。
 
-```bash
-python3 -m core.benchmark.lcore_adaptive_prepare \
-  --input /data/netops-runtime/LCORE-D/raw \
-  --output-jsonl /data/netops-runtime/LCORE-D/work/events-sample.jsonl \
-  --plan-json /data/netops-runtime/LCORE-D/work/feature-plan-core.json \
-  --max-records 50000
-```
+循环发送是可行的，但它更适合作为系统健康检查流量，而不是直接混入论文级原始统计。它可以用于 LLM provider 接上之后验证全链路是否仍然可运行，例如 Kafka transport、core ingest、alerting、evidence assembly 和 UI freshness。用于论文评测时，每一轮 loop 都必须带独立 `run_id`，并在统计时显式分组或剔除重复 replay。
 
-运行 topology-gate ablation：
+运行边界：
 
-```bash
-python3 -m core.benchmark.topology_subgraph_ablation \
-  --alert-dir /data/netops-runtime/LCORE-D/work/alerts-sample \
-  --limit-files 0 \
-  --output-json /data/netops-runtime/LCORE-D/work/topology-subgraph-ablation.json
-```
+- 默认仍然是 one-shot replay，读到 EOF 后停止。
+- edge forwarder 本身是循环扫描文件的 daemon，但只发送 byte checkpoint 之后新增的 JSONL 行。
+- core consumer 持续消费 Kafka 新消息，但不会主动重放历史 offset，除非重置 consumer group。
+- 如果启用 LCORE streamer loop mode，每一轮必须使用不同 `run_id`；否则重复 `event_id` 被 core 丢弃是预期行为。
 
-验证当前分支：
+## Runtime Feature 与流速记录
 
-```bash
-python3 -m pytest tests/core/test_topology_subgraph.py tests/core/test_aiops_agent.py tests/common/test_adaptive_features.py tests/core/test_rules.py -q
-cd frontend && PATH=/data/.local/node/bin:$PATH npm run build
-```
+下表记录 r230 edge 到 r450 core 的 LCORE-D replay 活跃窗口实测流速。
+
+| 阶段 | Runtime 对象 | 实测 feature 数量 | 实测数据量 | 实测流速 | 备注 |
+| --- | --- | ---: | ---: | ---: | --- |
+| LCORE-D raw CSV | 源数据行 | 每文件 `32-51` 列，7 个文件 union 后 `234` 列 | `169,712` 行，`26,670,593` bytes | offline source | 分文件列数：R1/R5/R7 为 `42`，R2 为 `32`，R3/R6 为 `51`，R4 为 `47` |
+| Adaptive feature plan | `feature-plan.json` | 采样 `43` 列；`1` 个 label field，`4` 个 entity fields，`7` 个 topology fields，`3` 个 metric fields | 基于 `5,000` 行采样生成 | 每轮 replay 生成一次 | 当前 label field 是 `class`；topology fields 包括 `Hop_to_core`、`Hop_to_server`、`path_up` |
+| Edge canonical fact JSONL | `events-lcore-d.jsonl` | `23` 个 top-level 字段；嵌套：topology `19`、device profile `12`、fault context `5`、本轮历史 dataset context `12` | `169,761` 行，`326,025,599` bytes | 最新完成 streamer 段 `17.12 EPS` | 新 replay 会增加 `dataset_context.run_id`，因此 dataset context 变为 `13` 个字段，top-level 仍为 `23` |
+| Edge forwarder -> Kafka | Kafka topic `netops.facts.raw.v1` | 同 canonical fact payload：`23` 个 top-level 字段 | 累计发送 `169,886` 条，`326,276,448` bytes，`0` dropped | 活跃窗口 `17.06 EPS`，约 `0.268 Mbps` | 累计量包含早期 smoke/replay 发送 |
+| Core correlator ingest | 质量门控后的 facts | 从 Kafka 消费的 canonical fact：`23` 个 top-level 字段 | 日志计数 `ingested=135,881`，`accepted=135,832`，`drop_duplicate_event_id=49` | 稳定窗口 `17.30 accepted facts/s` | 其他 drop 全为 `0`：缺字段、parse status、JSON error、DLQ |
+| Deterministic alert | `annotated_fault_v1` alert | `12` 个 top-level 字段；嵌套：dimensions `2`、metrics `3`、event excerpt `31`、topology `19`、device profile `12`、change context `6` | 日志计数 `alerts_emitted=3,416` | 稳定窗口 `0.0396 alerts/s` | 告警路径是 deterministic post-quality-gate；LLM 不参与告警成立 |
+| Runtime suggestion tail | `netops.aiops.suggestions.v1` | `24` 个 top-level 字段；嵌套：context `17`、evidence bundle `17`、inference `12`、runtime seed `7`、hypothesis set `6`、review verdict `9`、runbook draft `15`、stage requests `2` | topic latest offsets 跨历史合计 `293,458` 条 | 下游 AI 速率取决于告警产生速率与 LLM gate 策略 | 最新 tail sample 确认当前 suggestion schema 已是 24-field 版本 |
